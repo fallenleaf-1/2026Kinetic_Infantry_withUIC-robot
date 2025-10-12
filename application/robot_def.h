@@ -41,7 +41,13 @@
 #define CENTER_GIMBAL_OFFSET_X 0    // 云台旋转中心距底盘几何中心的距离,前后方向,云台位于正中心时默认设为0
 #define CENTER_GIMBAL_OFFSET_Y 0    // 云台旋转中心距底盘几何中心的距离,左右方向,云台位于正中心时默认设为0
 #define RADIUS_WHEEL 60             // 轮子半径
-#define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
+#define WHEEL_PERIMETER (2 * 3.14159f * RADIUS_WHEEL) // 轮子周长
+#define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换\
+//四个驱动电机朝向前方时 转向电机初始编码值
+#define GM6020_FL_ANGLE 23434		//装上去的时候Y轴正向对应的编码值(偏置角度)
+#define GM6020_FR_ANGLE 26985
+#define GM6020_BL_ANGLE 344
+#define GM6020_BR_ANGLE 13310
 
 #define GYRO2GIMBAL_DIR_YAW 1   // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
 #define GYRO2GIMBAL_DIR_PITCH 1 // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反
