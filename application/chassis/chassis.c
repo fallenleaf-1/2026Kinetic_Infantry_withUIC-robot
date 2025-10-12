@@ -48,6 +48,7 @@ static Referee_Interactive_info_t ui_data; // UI数据，将底盘中的数据�
 
 static SuperCapInstance *cap;                                       // 超级电容
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
+static DJIMotorInstance *Servo_lf, *Servo_rf, *Servo_lb, *Servo_rb; // left right forward back
 
 /* 用于自旋变速策略的时间变量 */
 // static float t;
@@ -59,7 +60,7 @@ static float vt_lf, vt_rf, vt_lb, vt_rb;                  // 底盘速度解算�
 void ChassisInit()
 {
     // 四个轮子的参数一样,改tx_id和反转标志位即可
-    Motor_Init_Config_s chassis_motor_config = {
+    Motor_Init_Config_s chassis_M3508_motor_config = {
         .can_init_config.can_handle = &hcan1,
         .controller_param_init_config = {
             .speed_PID = {
@@ -82,41 +83,82 @@ void ChassisInit()
     };
     //  @todo: 当前还没有设置电机的正反转,仍然需要手动添加reference的正负号,需要电机module的支持,待修改.
     //使用功率控制的电机需要使用PowerControlInit()函数初始化,因为电机的控制方式不同
-    chassis_motor_config.can_init_config.tx_id = 1;
-    chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_lf = PowerControlInit(&chassis_motor_config);
+    chassis_M3508_motor_config.can_init_config.tx_id = 1;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_lf = PowerControlInit(&chassis_M3508_motor_config);
 
-    chassis_motor_config.can_init_config.tx_id = 2;
-    chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_rf = PowerControlInit(&chassis_motor_config);
+    chassis_M3508_motor_config.can_init_config.tx_id = 2;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_rf = PowerControlInit(&chassis_M3508_motor_config);
 
-    chassis_motor_config.can_init_config.tx_id = 4;
-    chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_lb = PowerControlInit(&chassis_motor_config);
+    chassis_M3508_motor_config.can_init_config.tx_id = 4;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_lb = PowerControlInit(&chassis_M3508_motor_config);
 
-    chassis_motor_config.can_init_config.tx_id = 3;
-    chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_rb = PowerControlInit(&chassis_motor_config);
+    chassis_M3508_motor_config.can_init_config.tx_id = 3;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_rb = PowerControlInit(&chassis_M3508_motor_config);
 
-    referee_data = UITaskInit(&huart6, &ui_data); // 裁判系统初始化,会同时初始化UI
 
-/* Buffer环暂未测试，逻辑是计算期望buffer与实际buffer的差值，转换为冗余的功率，todo：输入给功率控制部分，待完善 */
-    PID_Init_Config_s Buffer_pid_conf = {
-        .Kp = 0.1,
-        .Ki = 0,
-        .Kd = 0,
-        .IntegralLimit = 1000,
-        .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-        .MaxOut = 1000,
-    };
-    PIDInit(&buffer_PID, &Buffer_pid_conf); // 缓冲能量PID初始化
-    SuperCap_Init_Config_s cap_conf = {
-        .can_config = {
-            .can_handle = &hcan2,
-            .tx_id = 0x302, // 超级电容默认接收id
-            .rx_id = 0x301, // 超级电容默认发送id,注意tx和rx在其他人看来是反的
-        }};
-    cap = SuperCapInit(&cap_conf); // 超级电容初始化
+    // GM6020电机的初始化(舵机电机)
+     Motor_Init_Config_s chassis_GM6020_motor_config = {
+        .can_init_config.can_handle = &hcan1,
+        .controller_param_init_config = {
+            .angle_PID = {
+                .Kp = 180,
+                .Ki = 0.5,
+                .Kd = 0,
+                .MaxOut = 30000,
+                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
+            },
+            .speed_PID = {
+                .Kp = 50,
+                .Ki = 0,
+                .Kd = 0,
+                .MaxOut = 30000,
+                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
+            },
+            // .other_angle_feedback_ptr = &gimba_IMU_data->YawTotalAngle,
+            // 还需要增加角速度额外反馈指针,注意方向,ins_task.md中有c板的bodyframe坐标系说明
+            // .other_speed_feedback_ptr = &gimba_IMU_data->Gyro[2],
+        },
+        .controller_setting_init_config = {
+            .angle_feedback_source = MOTOR_FEED,
+            .speed_feedback_source = MOTOR_FEED,
+            .outer_loop_type = ANGLE_LOOP,
+            .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
+            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL, 
+        },
+        .motor_type = GM6020};
+
+    chassis_GM6020_motor_config.can_init_config.tx_id = 5;
+    Servo_lf = PowerControlInit(&chassis_GM6020_motor_config);
+    chassis_GM6020_motor_config.can_init_config.tx_id = 6;
+    Servo_rf = PowerControlInit(&chassis_GM6020_motor_config);
+    chassis_GM6020_motor_config.can_init_config.tx_id = 7;
+    Servo_lb = PowerControlInit(&chassis_GM6020_motor_config);
+    chassis_GM6020_motor_config.can_init_config.tx_id = 8;
+    Servo_rb = PowerControlInit(&chassis_GM6020_motor_config);
+
+//     referee_data = UITaskInit(&huart6, &ui_data); // 裁判系统初始化,会同时初始化UI
+
+// /* Buffer环暂未测试，逻辑是计算期望buffer与实际buffer的差值，转换为冗余的功率，todo：输入给功率控制部分，待完善 */
+//     PID_Init_Config_s Buffer_pid_conf = {
+//         .Kp = 0.1,
+//         .Ki = 0,
+//         .Kd = 0,
+//         .IntegralLimit = 1000,
+//         .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
+//         .MaxOut = 1000,
+//     };
+//     PIDInit(&buffer_PID, &Buffer_pid_conf); // 缓冲能量PID初始化
+//     SuperCap_Init_Config_s cap_conf = {
+//         .can_config = {
+//             .can_handle = &hcan2,
+//             .tx_id = 0x302, // 超级电容默认接收id
+//             .rx_id = 0x301, // 超级电容默认发送id,注意tx和rx在其他人看来是反的
+//         }};
+//     cap = SuperCapInit(&cap_conf); // 超级电容初始化
 
     // 发布订阅初始化,如果为双板,则需要can comm来传递消息
 #ifdef CHASSIS_BOARD
