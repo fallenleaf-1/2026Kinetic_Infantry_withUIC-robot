@@ -55,8 +55,8 @@ static DJIMotorInstance *servo_lf, *servo_rf, *servo_lb, *servo_rb; // left righ
 
 /* 私有函数计算的中介变量,设为静态避免参数传递的开销 */
 static float chassis_vx, chassis_vy;                      // 将云台系的速度投影到底盘
-static float vt_lf, vt_rf, vt_lb, vt_rb;                  // 底盘电机速度解算后的临时输出,待进行限幅
-static float angle_lf, angle_rf, angle_lb, angle_rb;      // 底盘舵机角度解算后的临时输出,待进行限幅
+float vt_lf, vt_rf, vt_lb, vt_rb;                  // 底盘电机速度解算后的临时输出,待进行限幅
+float angle_lf, angle_rf, angle_lb, angle_rb;      // 底盘舵机角度解算后的临时输出,待进行限幅
 
 void ChassisInit()
 {
@@ -65,7 +65,7 @@ void ChassisInit()
         .can_init_config.can_handle = &hcan1,
         .controller_param_init_config = {
             .speed_PID = {
-                .Kp = 4.5, // 4.5
+                .Kp = 3, // 4.5
                 .Ki = 0,   // 0
                 .Kd = 0,   // 0
                 .IntegralLimit = 3000,
@@ -86,19 +86,19 @@ void ChassisInit()
     //使用功率控制的电机需要使用PowerControlInit()函数初始化,因为电机的控制方式不同
     chassis_M3508_motor_config.can_init_config.tx_id = 1;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_lf = PowerControlInit(&chassis_M3508_motor_config);
+    motor_lf = DJIMotorInit(&chassis_M3508_motor_config);
 
     chassis_M3508_motor_config.can_init_config.tx_id = 2;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_rf = PowerControlInit(&chassis_M3508_motor_config);
+    motor_rf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    chassis_M3508_motor_config.can_init_config.tx_id = 4;
-    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_lb = PowerControlInit(&chassis_M3508_motor_config);
+    // chassis_M3508_motor_config.can_init_config.tx_id = 4;
+    // chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    // motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
 
-    chassis_M3508_motor_config.can_init_config.tx_id = 3;
-    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_rb = PowerControlInit(&chassis_M3508_motor_config);
+    // chassis_M3508_motor_config.can_init_config.tx_id = 3;
+    // chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    // motor_rb = DJIMotorInit(&chassis_M3508_motor_config);
 
 
     // GM6020电机的初始化(舵机电机)
@@ -133,13 +133,13 @@ void ChassisInit()
         .motor_type = GM6020};
 
     chassis_GM6020_motor_config.can_init_config.tx_id = 5;
-    servo_lf = PowerControlInit(&chassis_GM6020_motor_config);
+    servo_lf = DJIMotorInit(&chassis_GM6020_motor_config);
     chassis_GM6020_motor_config.can_init_config.tx_id = 6;
-    servo_rf = PowerControlInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 7;
-    servo_lb = PowerControlInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 8;
-    servo_rb = PowerControlInit(&chassis_GM6020_motor_config);
+    servo_rf = DJIMotorInit(&chassis_GM6020_motor_config);
+    // chassis_GM6020_motor_config.can_init_config.tx_id = 8;
+    // servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
+    // chassis_GM6020_motor_config.can_init_config.tx_id = 7;
+    // servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
 
 //     referee_data = UITaskInit(&huart6, &ui_data); // 裁判系统初始化,会同时初始化UI
 
@@ -189,7 +189,7 @@ void ChassisInit()
 #define RB_CENTER ((HALF_TRACK_WIDTH - CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
 
 #define ABS(x) (((x)>0)?(x):(-(x)))
-//将角度范围控制在 0 - 32767
+//将编码器数值范围控制在 0 - 32767
 float Angle_Limit (float angle ,float max)
 {
 		if(angle > max)
@@ -200,76 +200,81 @@ float Angle_Limit (float angle ,float max)
 }
 
 //将电机转子转向内侧时 修正方向
-int8_t steering_dirt[4] = { 1, -1, 1, -1};
-void chassis_vector_to_M3508_wheel_speed(float vx_set, float vy_set, float wz_set, float wheel_speed[4])
+int8_t steering_dirt[4] = {1, -1, 1, -1};
+// 改为接收指针，写回调用者的变量
+void chassis_vector_to_M3508_wheel_speed(float vx_set, float vy_set, float wz_set,
+                                         float *vt_lf, float *vt_rf, float *vt_lb, float *vt_rb)
 {
-	  float wheel_rpm_ratio;
-	
-    wheel_rpm_ratio = 60.0f / (WHEEL_PERIMETER * 3.14159f) * REDUCTION_RATIO_WHEEL * 1000;
+    // float wheel_rpm_ratio;
+    // wheel_rpm_ratio = 60.0f / (WHEEL_PERIMETER * 3.14159f) * REDUCTION_RATIO_WHEEL * 1000;
 
-    wheel_speed[0] = steering_dirt[0] * sqrt(	pow(vy_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       +	pow(vx_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       ) * wheel_rpm_ratio ;
-    wheel_speed[1] = steering_dirt[1] * sqrt(	pow(vy_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       +	pow(vx_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       ) * wheel_rpm_ratio ;
-    wheel_speed[2] = steering_dirt[2] * sqrt(	pow(vy_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       +	pow(vx_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       ) * wheel_rpm_ratio ;
-    wheel_speed[3] = steering_dirt[3] * sqrt(	pow(vy_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       +	pow(vx_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       ) * wheel_rpm_ratio ;
-		
+    *vt_lf = (float)(steering_dirt[0] * sqrtf(powf(vy_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
+                       + powf(vx_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
+                       ));
+    *vt_rf = (float)(steering_dirt[1] * sqrtf(powf(vy_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
+                       + powf(vx_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
+                       )); 
+    *vt_rb = (float)(steering_dirt[2] * sqrtf(powf(vy_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
+                       + powf(vx_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
+                       ));
+    *vt_lb = (float)(steering_dirt[3] * sqrtf(powf(vy_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
+                       + powf(vx_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
+                       ));
 }
 
 double atan_angle[4];
-void chassis_vector_to_GM6020_wheel_angle(float vx_set, float vy_set, float wz_set, float wheel_angle[4])
+void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float wz_set, float *angle_lf, float *angle_rf, float *angle_lb, float *angle_rb)
 {
     // GM6020目标角度计算
     if(!(vx_set == 0 && vy_set == 0 && wz_set == 0))//防止除数为零
     {
         //由于atan2算出来的结果是弧度，需转换成角度 计算公式为 弧度 * 180.f / PI 最终得到角度值 (0.707107f == 根号2)
         atan_angle[0] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;		
+/**
+ * @brief DJI电机控制函数
+ * 该函数用于控制所有DJI电机，包括PID计算、方向处理、反馈处理和CAN报文发送
+ */
         atan_angle[1] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
         atan_angle[2] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
+    /* 变量声明和初始化 */
         atan_angle[3] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;	
     }  
-		
-        // 将一圈360°转换成编码值的一圈0-32767 -> 角度 * 32767 / 360 最终转换为需要转动的角度对应的编码值，再加上偏置角度,最终得到目标编码值
-        wheel_angle[0] = Angle_Limit(GM6020_FL_ANGLE + (float)(atan_angle[0] * 91.02f), 32767.f);
-        wheel_angle[1] = Angle_Limit(GM6020_FR_ANGLE + (float)(atan_angle[1] * 91.02f), 32767.f);
-        wheel_angle[2] = Angle_Limit(GM6020_BL_ANGLE + (float)(atan_angle[2] * 91.02f), 32767.f);
-        wheel_angle[3] = Angle_Limit(GM6020_BR_ANGLE + (float)(atan_angle[3] * 91.02f), 32767.f);
+    // 将一圈360°转换成编码值的一圈0-32767 -> 角度 * 32767 / 360 最终转换为需要转动的角度对应的编码值，再加上偏置角度,最终得到目标编码值
+    *angle_lf = Angle_Limit(GM6020_FL_ANGLE + (float)(atan_angle[0] * 91.02f), 32767.f);
+    *angle_rf = Angle_Limit(GM6020_FR_ANGLE + (float)(atan_angle[1] * 91.02f), 32767.f);
+    *angle_rb = Angle_Limit(GM6020_BL_ANGLE + (float)(atan_angle[2] * 91.02f), 32767.f);
+    *angle_lb = Angle_Limit(GM6020_BR_ANGLE + (float)(atan_angle[3] * 91.02f), 32767.f);
 
     //优弧 劣弧 驱动电机转向判断
-    if( ABS( (float)servo_lf->measure.ecd - wheel_angle[0] ) > 8192 )
+    /* 电机控制主循环 */
+    if( ABS( (float)servo_lf->measure.ecd - *angle_lf ) > 8192 )
     {	
         steering_dirt[0] = -1;
-        wheel_angle[0] = Angle_Limit( wheel_angle[0] - 16384, 32767 );
+        *angle_lf = Angle_Limit( *angle_lf - 16384, 32767 );
     }
     else
         steering_dirt[0] = 1;
-		
-   if( ABS( (float)servo_rf->measure.ecd - wheel_angle[1] ) > 8192 )
+
+   if( ABS( (float)servo_rf->measure.ecd - *angle_rf ) > 8192 )
 	 {	
 			steering_dirt[1] = 1;
-			wheel_angle[1] = Angle_Limit( wheel_angle[1] - 16384, 32767 );
+			*angle_rf = Angle_Limit( *angle_rf - 16384, 32767 );
 	 }
 	 else
 		 steering_dirt[1] = -1;
 
-   if( ABS( (float)servo_rb->measure.ecd - wheel_angle[2] ) > 8192 )
+   if( ABS( (float)servo_rb->measure.ecd - *angle_lb ) > 8192 )
 	 {	
 			steering_dirt[2] = -1;
-			wheel_angle[2] = Angle_Limit( wheel_angle[2] - 16384, 32767 );
+			*angle_lb = Angle_Limit( *angle_lb - 16384, 32767 );
 	 }
 	 else
 		 steering_dirt[2] = 1;
 
-   if( ABS( (float)servo_lb->measure.ecd - wheel_angle[3] ) > 8192 )
+   if( ABS( (float)servo_lb->measure.ecd - *angle_rb ) > 8192 )
 	 {	
 			steering_dirt[3] = 1;
-			wheel_angle[3] = Angle_Limit( wheel_angle[3] - 16384, 32767 );
+			*angle_rb = Angle_Limit( *angle_rb - 16384, 32767 );
 	 }
 	 else
 		 steering_dirt[3] = -1;
@@ -289,8 +294,8 @@ static void MecanumCalculate()
     // vt_rb = chassis_vx + chassis_vy - chassis_cmd_recv.wz * RB_CENTER;
 
     // 舵轮底盘运动学正解算
-    chassis_vector_to_M3508_wheel_speed(chassis_vx, chassis_vy, chassis_cmd_recv.wz, (float[4]){vt_lf, vt_rf, vt_lb, vt_rb});
-    chassis_vector_to_GM6020_wheel_angle(chassis_vx, chassis_vy, chassis_cmd_recv.wz, (float[4]){angle_lf, angle_rf, angle_lb, angle_rb});
+    chassis_vector_to_M3508_wheel_speed(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &vt_lf, &vt_rf, &vt_rb, &vt_lb);
+    // chassis_vector_to_GM6020_wheel_angle_ecd(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &angle_lf, &angle_rf, &angle_rb, &angle_lb);
 }
 
 /**
@@ -306,8 +311,12 @@ static void LimitChassisOutput()
     // 完成功率限制后进行电机参考输入设定
     DJIMotorSetRef(motor_lf, vt_lf);
     DJIMotorSetRef(motor_rf, vt_rf);
-    DJIMotorSetRef(motor_lb, vt_lb);
-    DJIMotorSetRef(motor_rb, vt_rb);
+    // DJIMotorSetRef(motor_lb, vt_lb);
+    // DJIMotorSetRef(motor_rb, vt_rb);
+    DJIMotorSetRef(servo_lf, angle_lf);
+    DJIMotorSetRef(servo_rf, angle_rf);
+    // DJIMotorSetRef(servo_lb, angle_lb);
+    // DJIMotorSetRef(servo_rb, angle_rb);
 }
 
 /**
@@ -334,20 +343,28 @@ void ChassisTask()
     chassis_cmd_recv = *(Chassis_Ctrl_Cmd_s *)CANCommGet(chasiss_can_comm);
 #endif // CHASSIS_BOARD
 
-    SetPowerLimit(referee_data->GameRobotState.chassis_power_limit);//设置功率限制
+    // SetPowerLimit(referee_data->GameRobotState.chassis_power_limit);//设置功率限制
     if (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE)
     { // 如果出现重要模块离线或遥控器设置为急停,让电机停止
         DJIMotorStop(motor_lf);
         DJIMotorStop(motor_rf);
-        DJIMotorStop(motor_lb);
-        DJIMotorStop(motor_rb);
+        // DJIMotorStop(motor_lb);
+        // DJIMotorStop(motor_rb);
+        DJIMotorStop(servo_lf);
+        DJIMotorStop(servo_rf);
+        // DJIMotorStop(servo_lb);
+        // DJIMotorStop(servo_rb);
     }
     else
     { // 正常工作
         DJIMotorEnable(motor_lf);
         DJIMotorEnable(motor_rf);
-        DJIMotorEnable(motor_lb);
-        DJIMotorEnable(motor_rb);
+        // DJIMotorEnable(motor_lb);
+        // DJIMotorEnable(motor_rb);
+        DJIMotorEnable(servo_lf);
+        DJIMotorEnable(servo_rf);
+        // DJIMotorEnable(servo_lb);
+        // DJIMotorEnable(servo_rb);
     }
 
     // 根据控制模式设定旋转速度
