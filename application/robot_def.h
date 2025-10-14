@@ -42,7 +42,8 @@
 #define CENTER_GIMBAL_OFFSET_Y 0    // 云台旋转中心距底盘几何中心的距离,左右方向,云台位于正中心时默认设为0
 #define RADIUS_WHEEL 60             // 轮子半径
 #define WHEEL_PERIMETER (2 * PI * RADIUS_WHEEL) // 轮子周长
-#define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换\
+#define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
+#define CHASSIS_DEAD_BAND 10   // 底盘速度死区,低于该值的速度指令将被置为0
 //四个驱动电机朝向前方时 转向电机初始编码值
 #define GM6020_LF_ANGLE 0		//装上去的时候Y轴正向对应的角度
 #define GM6020_RF_ANGLE 0

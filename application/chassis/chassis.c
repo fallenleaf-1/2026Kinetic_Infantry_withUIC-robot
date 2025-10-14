@@ -55,8 +55,8 @@ static DJIMotorInstance *servo_lf, *servo_rf, *servo_lb, *servo_rb; // left righ
 
 /* 私有函数计算的中介变量,设为静态避免参数传递的开销 */
 static float chassis_vx, chassis_vy;                      // 将云台系的速度投影到底盘
-float vt_lf, vt_rf, vt_lb, vt_rb;                  // 底盘电机速度解算后的临时输出,待进行限幅
-float angle_lf, angle_rf, angle_lb, angle_rb;      // 底盘舵机角度解算后的临时输出,待进行限幅
+static float vt_lf, vt_rf, vt_lb, vt_rb;                  // 底盘电机速度解算后的临时输出,待进行限幅
+static float angle_lf, angle_rf, angle_lb, angle_rb;      // 底盘舵机角度解算后的临时输出,待进行限幅
 
 void ChassisInit()
 {
@@ -192,17 +192,6 @@ void ChassisInit()
 #define LB_CENTER ((HALF_TRACK_WIDTH + CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
 #define RB_CENTER ((HALF_TRACK_WIDTH - CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
 
-#define ABS(x) (((x)>0)?(x):(-(x)))
-//将编码器数值范围控制在 0 - 32767
-float Angle_Limit (float angle ,float max)
-{
-		if(angle > max)
-			angle -= max;
-		if(angle < 0)
-			angle += max; 
-		return angle;
-}
-
 //将电机转子转向内侧时 修正方向
 int8_t steering_dirt[4] = {1, -1, 1, -1};
 // 改为接收指针，写回调用者的变量
@@ -244,39 +233,32 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
     *angle_rb = GM6020_RB_ANGLE + atan_angle[2];
     *angle_lb = GM6020_LB_ANGLE + atan_angle[3];
 
-//     //优弧 劣弧 驱动电机转向判断
-//     /* 电机控制主循环 */
-//     if( ABS( (float)servo_lf->measure.ecd - *angle_lf ) > 8192 )
-//     {	
-//         steering_dirt[0] = -1;
-//         *angle_lf = Angle_Limit( *angle_lf - 16384, 32767 );
-//     }
-//     else
-//         steering_dirt[0] = 1;
+    // 优弧/劣弧 驱动电机转向判断（统一化处理，修正了后轮错配与环绕问题）
+    {
+        DJIMotorInstance *servos[4] = {servo_lf, servo_rf, servo_lb, servo_rb};
+        float *targets[4] = {angle_lf, angle_rf, angle_lb, angle_rb};
+        int8_t base_dir[4] = {1, -1, 1, -1}; // 对应每个舵轮的默认驱动方向
 
-//    if( ABS( (float)servo_rf->measure.ecd - *angle_rf ) > 8192 )
-// 	 {	
-// 			steering_dirt[1] = 1;
-// 			*angle_rf = Angle_Limit( *angle_rf - 16384, 32767 );
-// 	 }
-// 	 else
-// 		 steering_dirt[1] = -1;
-
-//    if( ABS( (float)servo_rb->measure.ecd - *angle_lb ) > 8192 )
-// 	 {	
-// 			steering_dirt[2] = -1;
-// 			*angle_lb = Angle_Limit( *angle_lb - 16384, 32767 );
-// 	 }
-// 	 else
-// 		 steering_dirt[2] = 1;
-
-//    if( ABS( (float)servo_lb->measure.ecd - *angle_rb ) > 8192 )
-// 	 {	
-// 			steering_dirt[3] = 1;
-// 			*angle_rb = Angle_Limit( *angle_rb - 16384, 32767 );
-// 	 }
-// 	 else
-// 		 steering_dirt[3] = -1;
+        for (int i = 0; i < 4; i++)
+        {
+            float angle_error = *targets[i] - servos[i]->measure.total_angle;
+            if (angle_error > 90.0f)
+            {
+                steering_dirt[i] = -base_dir[i];
+                *targets[i] = servos[i]->measure.total_angle + angle_error - 180.0f;
+            }
+            else if (angle_error < -90.0f)
+            {
+                steering_dirt[i] = -base_dir[i];
+                *targets[i] = servos[i]->measure.total_angle + angle_error + 180.0f;
+            }
+            else
+            {
+                steering_dirt[i] = base_dir[i];
+                *targets[i] = servos[i]->measure.total_angle + angle_error;
+            }
+        }
+    }
 
 }
 
