@@ -154,23 +154,23 @@ static void CalcOffsetAngle()
 static void RemoteControlSet()
 {
     // 控制底盘和云台运行模式,云台待添加,云台是否始终使用IMU数据?
-    if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
+    if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],小陀螺模式
     {
         chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
         gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
-        chassis_cmd_send.vx = 0;
-        chassis_cmd_send.vy = 0;
+        chassis_cmd_send.vx = 10.0f * (float)rc_data[TEMP].rc.rocker_r_; // _水平方向
+        chassis_cmd_send.vy = 10.0f * (float)rc_data[TEMP].rc.rocker_r1; // 1竖直方向
 
-        if((float)rc_data[TEMP].rc.rocker_r_ > 500)
-        {
-            chassis_cmd_send.wz = 100;
-        }
-        else if ((float)rc_data[TEMP].rc.rocker_r_ < -500)
-        {
-            chassis_cmd_send.wz = -100;
-        }
-        else
-            chassis_cmd_send.wz = 0;
+        // if((float)rc_data[TEMP].rc.rocker_r_ > 500)
+        // {
+        //     chassis_cmd_send.wz = 100;
+        // }
+        // else if ((float)rc_data[TEMP].rc.rocker_r_ < -500)
+        // {
+        //     chassis_cmd_send.wz = -100;
+        // }
+        // else
+        //     chassis_cmd_send.wz = 0;
     }
     else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],底盘和云台分离,底盘保持不转动
     {
@@ -180,7 +180,6 @@ static void RemoteControlSet()
         chassis_cmd_send.vx = 10.0f * (float)rc_data[TEMP].rc.rocker_r_; // _水平方向
         chassis_cmd_send.vy = 10.0f * (float)rc_data[TEMP].rc.rocker_r1; // 1竖直方向
     }
-
     // 云台参数,确定云台控制数据
     // if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 左侧开关状态为[中],视觉模式
     // {
@@ -188,13 +187,13 @@ static void RemoteControlSet()
     //     gimbal_cmd_send.pitch = (vision_recv_data->target_state == NO_TARGET ? gimbal_cmd_send.pitch : vision_recv_data->pitch);
     // }
     
-    // 左侧开关状态为[下],或视觉未识别到目标,纯遥控器拨杆控制
-    if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->target_state == NO_TARGET)
-    {   
-        // 按照摇杆的输出大小进行角度增量,增益系数需调整
-        gimbal_cmd_send.yaw -= 0.005f * (float)rc_data[TEMP].rc.rocker_l_;
-        gimbal_cmd_send.pitch += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
-    }
+    // // 左侧开关状态为[下],或视觉未识别到目标,纯遥控器拨杆控制
+    // if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->target_state == NO_TARGET)
+    // {   
+    //     // 按照摇杆的输出大小进行角度增量,增益系数需调整
+    //     gimbal_cmd_send.yaw -= 0.005f * (float)rc_data[TEMP].rc.rocker_l_;
+    //     gimbal_cmd_send.pitch += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
+    // }
 
     // 云台软件限位
     // if(gimbal_cmd_send.pitch > PITCH_MAX)

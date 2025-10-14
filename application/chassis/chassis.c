@@ -106,17 +106,17 @@ void ChassisInit()
         .can_init_config.can_handle = &hcan1,
         .controller_param_init_config = {
             .angle_PID = {
-                .Kp = 180,
-                .Ki = 0.5,
+                .Kp = 10,
+                .Ki = 0,
                 .Kd = 0,
-                .MaxOut = 30000,
+                .MaxOut = 20000,
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
             },
             .speed_PID = {
-                .Kp = 50,
-                .Ki = 0,
+                .Kp = 10,
+                .Ki = 0.1,
                 .Kd = 0,
-                .MaxOut = 30000,
+                .MaxOut = 20000,
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
             },
             // .other_angle_feedback_ptr = &gimba_IMU_data->YawTotalAngle,
@@ -140,6 +140,10 @@ void ChassisInit()
     // servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
     // chassis_GM6020_motor_config.can_init_config.tx_id = 7;
     // servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
+    angle_lf = GM6020_LF_ANGLE;
+    angle_rf = GM6020_RF_ANGLE; 
+    angle_rb = GM6020_RB_ANGLE;
+    angle_lb = GM6020_LB_ANGLE;
 
 //     referee_data = UITaskInit(&huart6, &ui_data); // 裁判系统初始化,会同时初始化UI
 
@@ -229,55 +233,50 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
     if(!(vx_set == 0 && vy_set == 0 && wz_set == 0))//防止除数为零
     {
         //由于atan2算出来的结果是弧度，需转换成角度 计算公式为 弧度 * 180.f / PI 最终得到角度值 (0.707107f == 根号2)
-        atan_angle[0] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;		
-/**
- * @brief DJI电机控制函数
- * 该函数用于控制所有DJI电机，包括PID计算、方向处理、反馈处理和CAN报文发送
- */
-        atan_angle[1] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
-        atan_angle[2] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
-    /* 变量声明和初始化 */
-        atan_angle[3] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;	
+        atan_angle[0] = atan2((vx_set - wz_set * 0.707107f * 0.5f),(vy_set + wz_set * 0.707107f * 0.5f)) * 180.0f / PI;		
+        atan_angle[1] = atan2((vx_set - wz_set * 0.707107f * 0.5f),(vy_set - wz_set * 0.707107f * 0.5f)) * 180.0f / PI;
+        atan_angle[2] = atan2((vx_set + wz_set * 0.707107f * 0.5f),(vy_set + wz_set * 0.707107f * 0.5f)) * 180.0f / PI;
+        atan_angle[3] = atan2((vx_set + wz_set * 0.707107f * 0.5f),(vy_set - wz_set * 0.707107f * 0.5f)) * 180.0f / PI;	
     }  
-    // 将一圈360°转换成编码值的一圈0-32767 -> 角度 * 32767 / 360 最终转换为需要转动的角度对应的编码值，再加上偏置角度,最终得到目标编码值
-    *angle_lf = Angle_Limit(GM6020_FL_ANGLE + (float)(atan_angle[0] * 91.02f), 32767.f);
-    *angle_rf = Angle_Limit(GM6020_FR_ANGLE + (float)(atan_angle[1] * 91.02f), 32767.f);
-    *angle_rb = Angle_Limit(GM6020_BL_ANGLE + (float)(atan_angle[2] * 91.02f), 32767.f);
-    *angle_lb = Angle_Limit(GM6020_BR_ANGLE + (float)(atan_angle[3] * 91.02f), 32767.f);
+    // 偏置角度+目标角度
+    *angle_lf = GM6020_LF_ANGLE + atan_angle[0];
+    *angle_rf = GM6020_RF_ANGLE + atan_angle[1];
+    *angle_rb = GM6020_RB_ANGLE + atan_angle[2];
+    *angle_lb = GM6020_LB_ANGLE + atan_angle[3];
 
-    //优弧 劣弧 驱动电机转向判断
-    /* 电机控制主循环 */
-    if( ABS( (float)servo_lf->measure.ecd - *angle_lf ) > 8192 )
-    {	
-        steering_dirt[0] = -1;
-        *angle_lf = Angle_Limit( *angle_lf - 16384, 32767 );
-    }
-    else
-        steering_dirt[0] = 1;
+//     //优弧 劣弧 驱动电机转向判断
+//     /* 电机控制主循环 */
+//     if( ABS( (float)servo_lf->measure.ecd - *angle_lf ) > 8192 )
+//     {	
+//         steering_dirt[0] = -1;
+//         *angle_lf = Angle_Limit( *angle_lf - 16384, 32767 );
+//     }
+//     else
+//         steering_dirt[0] = 1;
 
-   if( ABS( (float)servo_rf->measure.ecd - *angle_rf ) > 8192 )
-	 {	
-			steering_dirt[1] = 1;
-			*angle_rf = Angle_Limit( *angle_rf - 16384, 32767 );
-	 }
-	 else
-		 steering_dirt[1] = -1;
+//    if( ABS( (float)servo_rf->measure.ecd - *angle_rf ) > 8192 )
+// 	 {	
+// 			steering_dirt[1] = 1;
+// 			*angle_rf = Angle_Limit( *angle_rf - 16384, 32767 );
+// 	 }
+// 	 else
+// 		 steering_dirt[1] = -1;
 
-   if( ABS( (float)servo_rb->measure.ecd - *angle_lb ) > 8192 )
-	 {	
-			steering_dirt[2] = -1;
-			*angle_lb = Angle_Limit( *angle_lb - 16384, 32767 );
-	 }
-	 else
-		 steering_dirt[2] = 1;
+//    if( ABS( (float)servo_rb->measure.ecd - *angle_lb ) > 8192 )
+// 	 {	
+// 			steering_dirt[2] = -1;
+// 			*angle_lb = Angle_Limit( *angle_lb - 16384, 32767 );
+// 	 }
+// 	 else
+// 		 steering_dirt[2] = 1;
 
-   if( ABS( (float)servo_lb->measure.ecd - *angle_rb ) > 8192 )
-	 {	
-			steering_dirt[3] = 1;
-			*angle_rb = Angle_Limit( *angle_rb - 16384, 32767 );
-	 }
-	 else
-		 steering_dirt[3] = -1;
+//    if( ABS( (float)servo_lb->measure.ecd - *angle_rb ) > 8192 )
+// 	 {	
+// 			steering_dirt[3] = 1;
+// 			*angle_rb = Angle_Limit( *angle_rb - 16384, 32767 );
+// 	 }
+// 	 else
+// 		 steering_dirt[3] = -1;
 
 }
 
@@ -295,7 +294,7 @@ static void MecanumCalculate()
 
     // 舵轮底盘运动学正解算
     chassis_vector_to_M3508_wheel_speed(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &vt_lf, &vt_rf, &vt_rb, &vt_lb);
-    // chassis_vector_to_GM6020_wheel_angle_ecd(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &angle_lf, &angle_rf, &angle_rb, &angle_lb);
+    chassis_vector_to_GM6020_wheel_angle_ecd(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &angle_lf, &angle_rf, &angle_rb, &angle_lb);
 }
 
 /**
@@ -377,7 +376,7 @@ void ChassisTask()
         chassis_cmd_recv.wz = -1.5f * chassis_cmd_recv.offset_angle * abs(chassis_cmd_recv.offset_angle);
         break;
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
-        chassis_cmd_recv.wz = 4000;
+        chassis_cmd_recv.wz = 100;
         break;
     default:
         break;
