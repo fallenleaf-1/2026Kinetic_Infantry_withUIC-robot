@@ -9,6 +9,7 @@
 #include "general_def.h"
 #include "dji_motor.h"
 #include "bmi088.h"
+#include "buzzer.h"
 // bsp
 #include "bsp_dwt.h"
 #include "bsp_log.h"
@@ -48,6 +49,25 @@ static Robot_Status_e robot_state; // 机器人整体工作状态
 
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
+
+
+BuzzzerInstance* robocmd_alarm;
+/** 
+ * @brief Alarm实例化
+ *
+ */
+void AlarmInit()
+{
+    Buzzer_config_s buzzer_config ={
+            .alarm_level = ALARM_LEVEL_HIGH, //设置警报等级 同一状态下 高等级的响应
+            .loudness = 0.4, //设置响度
+            .octave = OCTAVE_1, // 设置音阶
+    };
+    robocmd_alarm = BuzzerRegister(&buzzer_config);
+
+    AlarmSetStatus(robocmd_alarm, ALARM_OFF);
+}
+
 void RobotCMDInit()
 {
     // BMI088_Init_Config_s bmi088_config = {
@@ -118,6 +138,7 @@ void RobotCMDInit()
     gimbal_cmd_send.pitch = 0;
 
     robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
+    AlarmInit();
 }
 
 /**
@@ -316,8 +337,8 @@ static void MouseKeySet()
  */
 static void EmergencyHandler()
 {
-    // 拨轮的向下拨超过一半进入急停模式.注意向打时下拨轮是正
-    if (rc_data[TEMP].rc.dial > 300 || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
+    // 遥控器右侧开关为[上]进入急停模式.注意向打时下拨轮是正
+    if (switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
     {
         robot_state = ROBOT_STOP;
         gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
@@ -326,13 +347,15 @@ static void EmergencyHandler()
         shoot_cmd_send.friction_mode = FRICTION_OFF;
         shoot_cmd_send.load_mode = LOAD_STOP;
         LOGERROR("[CMD] emergency stop!");
+        AlarmSetStatus(robocmd_alarm, ALARM_ON);
     }
-    // 遥控器右侧开关为[上],恢复正常运行
-    if (switch_is_up(rc_data[TEMP].rc.switch_right))
+    // 遥控器右侧开关为[中],恢复正常运行
+    if (switch_is_mid(rc_data[TEMP].rc.switch_left))
     {
         robot_state = ROBOT_READY;
         shoot_cmd_send.shoot_mode = SHOOT_ON;
         LOGINFO("[CMD] reinstate, robot ready");
+        AlarmSetStatus(robocmd_alarm, ALARM_OFF);
     }
 }
 
@@ -355,7 +378,7 @@ void RobotCMDTask()
     // 根据遥控器左侧开关,确定当前使用的控制模式为遥控器调试还是键鼠
     if (switch_is_down(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[下],遥控器控制
         RemoteControlSet();
-    else if (switch_is_up(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[上],键盘控制
+    else if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[中],键盘控制
         MouseKeySet();
 
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
