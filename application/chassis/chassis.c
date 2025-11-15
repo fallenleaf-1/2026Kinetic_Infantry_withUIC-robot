@@ -85,22 +85,22 @@ void ChassisInit()
         .motor_type = M3508,
     };
     //  @todo: 当前还没有设置电机的正反转,仍然需要手动添加reference的正负号,需要电机module的支持,待修改.
-    //使用功率控制的电机需要使用PowerControlInit()函数初始化,因为电机的控制方式不同
-    // chassis_M3508_motor_config.can_init_config.tx_id = 1;
-    // chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    // motor_lf = DJIMotorInit(&chassis_M3508_motor_config);
+    // 使用功率控制的电机需要使用PowerControlInit()函数初始化,因为电机的控制方式不同
+    chassis_M3508_motor_config.can_init_config.tx_id = 1;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_lf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    // chassis_M3508_motor_config.can_init_config.tx_id = 2;
-    // chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    // motor_rf = DJIMotorInit(&chassis_M3508_motor_config);
+    chassis_M3508_motor_config.can_init_config.tx_id = 2;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_rf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    // chassis_M3508_motor_config.can_init_config.tx_id = 4;
-    // chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    // motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
+    chassis_M3508_motor_config.can_init_config.tx_id = 4;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
 
-    // chassis_M3508_motor_config.can_init_config.tx_id = 3;
-    // chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    // motor_rb = DJIMotorInit(&chassis_M3508_motor_config);
+    chassis_M3508_motor_config.can_init_config.tx_id = 3;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_rb = DJIMotorInit(&chassis_M3508_motor_config);
 
 
     // GM6020电机的初始化(舵机电机)
@@ -138,10 +138,11 @@ void ChassisInit()
     servo_lf = DJIMotorInit(&chassis_GM6020_motor_config);
     chassis_GM6020_motor_config.can_init_config.tx_id = 6;
     servo_rf = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 1;
-    servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
     chassis_GM6020_motor_config.can_init_config.tx_id = 7;
     servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
+    chassis_GM6020_motor_config.can_init_config.can_handle = &hcan2;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 1;
+    servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
 
 //     referee_data = UITaskInit(&huart6, &ui_data); // 裁判系统初始化,会同时初始化UI
 
@@ -246,10 +247,10 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
     if(!(vx_set == 0 && vy_set == 0 && wz_set == 0))//防止除数为零
     {
         //由于atan2算出来的结果是弧度，需转换成角度 计算公式为 弧度 * 180.f / PI 最终得到角度值 (0.707107f == 根号2)
-        atan_angle[0] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;		
-        atan_angle[1] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
-        atan_angle[2] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
-        atan_angle[3] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
+        atan_angle[0] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;		
+        atan_angle[1] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
+        atan_angle[2] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
+        atan_angle[3] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
     }  
     // 目标单圈角度（0..360) 基于偏置+atan结果
     float desired_single[4];
