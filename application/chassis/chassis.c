@@ -105,7 +105,7 @@ void ChassisInit()
 
     // GM6020电机的初始化(舵机电机)
      Motor_Init_Config_s chassis_GM6020_motor_config = {
-        .can_init_config.can_handle = &hcan1,
+        .can_init_config.can_handle = &hcan2,
         .controller_param_init_config = {
             .angle_PID = {
                 .Kp = 10,
@@ -134,14 +134,13 @@ void ChassisInit()
         },
         .motor_type = GM6020};
 
-    chassis_GM6020_motor_config.can_init_config.tx_id = 5;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 1;
     servo_lf = DJIMotorInit(&chassis_GM6020_motor_config);
     chassis_GM6020_motor_config.can_init_config.tx_id = 6;
     servo_rf = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 7;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 4;
     servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.can_handle = &hcan2;
-    chassis_GM6020_motor_config.can_init_config.tx_id = 1;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 5;
     servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
 
 //     referee_data = UITaskInit(&huart6, &ui_data); // 裁判系统初始化,会同时初始化UI

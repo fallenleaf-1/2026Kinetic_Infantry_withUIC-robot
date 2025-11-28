@@ -21,8 +21,8 @@ void GimbalInit()
     // YAW
     Motor_Init_Config_s yaw_config = {
         .can_init_config = {
-            .can_handle = &hcan1,
-            .tx_id = 1,
+            .can_handle = &hcan2,
+            .tx_id = 2,
         },
         .controller_param_init_config = {
             .angle_PID = {
@@ -59,7 +59,7 @@ void GimbalInit()
     Motor_Init_Config_s pitch_config = {
         .can_init_config = {
             .can_handle = &hcan2,
-            .tx_id = 2,
+            .tx_id = 3,
         },
         .controller_param_init_config = {
             .angle_PID = {
