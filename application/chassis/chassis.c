@@ -134,14 +134,16 @@ void ChassisInit()
         },
         .motor_type = GM6020};
 
-    chassis_GM6020_motor_config.can_init_config.tx_id = 1;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 5;  // 左前 对应1号轮向电机
     servo_lf = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 6;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 6;  // 右前 对应2号轮向电机
     servo_rf = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 4;
-    servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 5;
+    chassis_GM6020_motor_config.can_init_config.can_handle = &hcan2;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 1;  // 右后 对应3号轮向电机
     servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
+    chassis_GM6020_motor_config.can_init_config.tx_id = 7;  // 左后 对应4号轮向电机
+    servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
+
 
 //     referee_data = UITaskInit(&huart6, &ui_data); // 裁判系统初始化,会同时初始化UI
 
