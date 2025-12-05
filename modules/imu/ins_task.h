@@ -63,8 +63,10 @@ typedef struct
     float Yaw;
     float YawTotalAngle;
 
+    attitude_t attitude; //存储最终姿态数据
+
     uint8_t init;
-} INS_t;
+} INS_t; // 存储 IMU 相关数据的结构体
 
 /* 用于修正安装误差的参数 */
 typedef struct
