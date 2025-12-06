@@ -17,8 +17,7 @@
 // 私有宏,自动将编码器转换成角度值
 #define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360
 #define PTICH_HORIZON_ANGLE (PITCH_HORIZON_ECD * ECD_ANGLE_COEF_DJI) // pitch水平时电机的角度,0-360
-#define ANGLE_SCALE YAW_ANGLE_LIMIT/(1684.0f-364.0f) // 遥控器通道值转成角度的转换因子                    // 云台最大旋转角度与编码器对应角度的比例系数
-
+#define ANGLE_SCALE YAW_ANGLE_LIMIT/1320.0f // 遥控器通道值转成角度的转换因子 接收范围-660~+660 对应角度范围
 /* cmd应用包含的模块实例指针和交互信息存储*/
 #ifdef GIMBAL_BOARD // 对双板的兼容,条件编译
 #include "can_comm.h"
@@ -207,8 +206,8 @@ static void RemoteControlSet()
         chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW; // 底盘不跟随云台
         gimbal_cmd_send.gimbal_mode = GIMBAL_ENCODER_MODE; // 云台使用编码器反馈，云台跟随底盘旋转
 
-        // yaw.ref = (通道值 - 通道中值) * 转换因子 + YAW_ALIGN_ANGLE(电机对齐时的角度) 
-        gimbal_cmd_send.yaw = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND)||((float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? ((float)rc_data[TEMP].rc.rocker_l_ - 1024.0f)* ANGLE_SCALE + YAW_ALIGN_ANGLE : YAW_ALIGN_ANGLE;
+        // yaw.ref = 通道值(范围+-660) * 转换因子 + YAW_ALIGN_ANGLE(电机对齐时的角度) 
+        gimbal_cmd_send.yaw = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND)||((float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ * ANGLE_SCALE + YAW_ALIGN_ANGLE : YAW_ALIGN_ANGLE;
 
         // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
