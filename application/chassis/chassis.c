@@ -105,7 +105,7 @@ void ChassisInit()
 
     // GM6020电机的初始化(舵机电机)
      Motor_Init_Config_s chassis_GM6020_motor_config = {
-        .can_init_config.can_handle = &hcan2,
+        .can_init_config.can_handle = &hcan1,
         .controller_param_init_config = {
             .angle_PID = {
                 .Kp = 10,

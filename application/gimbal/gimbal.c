@@ -126,11 +126,6 @@ void GimbalTask()
         break;
     // 使用编码器的反馈，可实现云台追随底盘的功能
     case GIMBAL_ENCODER_MODE: 
-        DJIMotorEnable(yaw_motor);
-        DJIMotorEnable(pitch_motor);
-        DJIMotorChangeFeed(yaw_motor, ANGLE_LOOP, MOTOR_FEED);
-        DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, MOTOR_FEED);
-        DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // yaw和pitch会在robot_cmd中处理好多圈和单圈
         break;
     default:
         break;
