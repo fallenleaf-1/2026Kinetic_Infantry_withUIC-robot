@@ -177,12 +177,16 @@ static void RemoteControlSet()
     // 控制底盘和云台运行模式,云台待添加,云台是否始终使用IMU数据?
     if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],小陀螺模式
     {
-        chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
+        chassis_cmd_send.chassis_mode = CHASSIS_ROTATE; // 底盘小陀螺模式
         gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
 
+        // 死区判断
+        float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
+        float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
-        gimbal_cmd_send.yaw -= 0.0025f * (float)rc_data[TEMP].rc.rocker_l_;
-        gimbal_cmd_send.pitch  += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
+        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
+        gimbal_cmd_send.pitch  += 0.001f * gimbal_pitch_input;
+
 
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
         chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 5.0f : 0.0f; // 1竖直方向
@@ -200,20 +204,31 @@ static void RemoteControlSet()
     }
     else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],底盘和云台分离,底盘保持不转动
     {
-        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+        chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW; // 底盘不跟随云台
         gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+
+        // 死区判断
+        float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
+        float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
+        // 系数需要调整
+        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
+        gimbal_cmd_send.pitch  += 0.001f * gimbal_pitch_input;
+
         // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
         chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 5.0f : 0.0f; // 1竖直方向
     }
-    else if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台 
+    else if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
     {
         chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW; // 底盘跟随云台
         gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
 
+        // 死区判断
+        float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
+        float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
-        gimbal_cmd_send.yaw -= 0.0025f * (float)rc_data[TEMP].rc.rocker_l_;
-        gimbal_cmd_send.pitch  += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
+        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
+        gimbal_cmd_send.pitch  += 0.001f * gimbal_pitch_input;
 
         // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
@@ -355,7 +370,7 @@ static void MouseKeySet()
  */
 static void EmergencyHandler()
 {
-    // 遥控器右侧开关为[上]进入急停模式.注意向打时下拨轮是正
+    // 遥控器左侧开关为[上]进入急停模式.注意向打时下拨轮是正
     if (switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
     {
         robot_state = ROBOT_STOP;
