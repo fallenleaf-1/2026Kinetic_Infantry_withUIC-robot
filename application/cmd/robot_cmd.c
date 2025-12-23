@@ -184,7 +184,16 @@ static void RemoteControlSet()
         float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch  += 0.001f * gimbal_pitch_input;
+        gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input;
+        // 云台pitch限位
+        if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
+        {
+            gimbal_cmd_send.pitch = PITCH_MAX_ANGLE;
+        }
+        else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
+        {
+            gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
+        }
 
 
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
@@ -211,11 +220,20 @@ static void RemoteControlSet()
         float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch  += 0.001f * gimbal_pitch_input;
+        gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input;
+        // 云台pitch限位
+        if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
+        {
+            gimbal_cmd_send.pitch = PITCH_MAX_ANGLE;
+        }
+        else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
+        {
+            gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
+        }
 
         // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
-        chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
-        chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 5.0f : 0.0f; // 1竖直方向
+        chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 60.0f : 0.0f; // _水平方向
+        chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 60.0f : 0.0f; // 1竖直方向
     }
     else if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
     {
@@ -227,7 +245,16 @@ static void RemoteControlSet()
         float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch  += 0.001f * gimbal_pitch_input;
+        gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input;
+        // 云台pitch限位
+        if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
+        {
+            gimbal_cmd_send.pitch = PITCH_MAX_ANGLE;
+        }
+        else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
+        {
+            gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
+        }
 
         // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向

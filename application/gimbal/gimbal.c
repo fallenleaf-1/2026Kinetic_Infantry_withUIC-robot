@@ -63,20 +63,27 @@ void GimbalInit()
         },
         .controller_param_init_config = {
             .angle_PID = {
-                .Kp = 10, // 10
-                .Ki = 0,
-                .Kd = 0,
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .IntegralLimit = 100,
-                .MaxOut = 500,
+                .Kp = 5,  
+                .Ki = 0,        
+                .Kd = 0,     
+                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement | PID_ChangingIntegrationRate | PID_OutputFilter | PID_DerivativeFilter,
+                .IntegralLimit = 10,
+                .CoefB = 1,   
+                .CoefA = 2,   
+                .MaxOut = 20,
+                .Derivative_LPF_RC = 0.001,
+                .Output_LPF_RC = 0.05,
             },
             .speed_PID = {
-                .Kp = 50,  // 50
-                .Ki = 350, // 350
-                .Kd = 0,   // 0
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .IntegralLimit = 2500,
-                .MaxOut = 20000,
+                .Kp = 1500,  
+                .Ki = 2000, 
+                .Kd = 0,
+                .CoefB = 0.6,
+                .CoefA = 0.3,
+                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_ChangingIntegrationRate | PID_OutputFilter,
+                .IntegralLimit = 500,
+                .MaxOut = 5000,
+                .Output_LPF_RC = 0.005f,
             },
             .other_angle_feedback_ptr = &gimba_IMU_data->Pitch,
             // 还需要增加角速度额外反馈指针,注意方向,ins_task.md中有c板的bodyframe坐标系说明
@@ -87,6 +94,7 @@ void GimbalInit()
             .speed_feedback_source = OTHER_FEED,
             .outer_loop_type = ANGLE_LOOP,
             .close_loop_type = SPEED_LOOP | ANGLE_LOOP,
+            .feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE,
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
         .motor_type = GM6020,
