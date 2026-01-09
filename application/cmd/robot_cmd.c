@@ -157,13 +157,13 @@ static void CalcOffsetAngle()
         chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE - 360.0f;
     else
         chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-    
-    // 如果底盘不跟随云台,则保持offset_angle为0 确保yaw电机转动时底盘解算正确
+
+    // 保证在不跟随模式下offset_angle为0,确保底盘舵向电机角度解算不受yaw影响
     if(chassis_cmd_send.chassis_mode == CHASSIS_NO_FOLLOW)
     {
         chassis_cmd_send.offset_angle = 0.0f;
     }
-
+    
 #else // 小于180度
     if (angle > YAW_ALIGN_ANGLE)
         chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
@@ -171,6 +171,12 @@ static void CalcOffsetAngle()
         chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
     else
         chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE + 360.0f;
+
+    // 保证在不跟随模式下offset_angle为0,确保底盘舵向电机角度解算不受yaw影响
+    if(chassis_cmd_send.chassis_mode == CHASSIS_NO_FOLLOW)
+    {
+        chassis_cmd_send.offset_angle = 0.0f;
+    }
 #endif
 }
 
