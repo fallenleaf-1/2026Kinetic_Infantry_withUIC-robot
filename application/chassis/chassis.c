@@ -27,6 +27,7 @@
 #define HALF_WHEEL_BASE (WHEEL_BASE / 2.0f)     // 半轴距
 #define HALF_TRACK_WIDTH (TRACK_WIDTH / 2.0f)   // 半轮距
 #define PERIMETER_WHEEL (RADIUS_WHEEL * 2 * PI) // 轮子周长
+#define CLAMP(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x))) // 限幅宏定义
 
 #define ABS(x) (((x)>0)?(x):(-(x)))
 
@@ -108,9 +109,9 @@ void ChassisInit()
         .can_init_config.can_handle = &hcan1,
         .controller_param_init_config = {
             .angle_PID = {
-                .Kp = 10,
-                .Ki = 0,
-                .Kd = 0,
+                .Kp = 50,
+                .Ki = 5,
+                .Kd = 1,
                 .MaxOut = 20000,
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
             },
@@ -283,6 +284,13 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
 
         // 再基于多圈差值判断是否需要翻转驱动方向（优劣弧）
         float angle_diff = Normalize180(*targets[i] - cur_total);
+
+        if (chassis_cmd_recv.chassis_mode == CHASSIS_FOLLOW_GIMBAL_YAW)
+        {
+            steering_dirt[i] = base_dir[i];
+            continue;   //CHASSIS_FOLLOW_GIMBAL_YAW模式直接跳过翻转判断
+        }
+
         if (angle_diff > 90.0f)
         {
             steering_dirt[i] = -base_dir[i];
@@ -393,7 +401,11 @@ void ChassisTask()
         chassis_cmd_recv.wz = 0;
         break;
     case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,不单独设置pid,以误差角度平方为速度输出
-        chassis_cmd_recv.wz = -1.5f * chassis_cmd_recv.offset_angle * abs(chassis_cmd_recv.offset_angle);
+        float angle_error = Normalize180(chassis_cmd_recv.offset_angle);
+        float wz = 0.1f * angle_error * abs(angle_error);
+        wz = CLAMP(wz, -600.0f, 600.0f); // 限幅防止过快旋转
+        chassis_cmd_recv.wz = wz;
+
         break;
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
         chassis_cmd_recv.wz = 100;
@@ -405,11 +417,18 @@ void ChassisTask()
     // 根据云台和底盘的角度offset将控制量映射到底盘坐标系上
     // 底盘逆时针旋转为角度正方向;云台命令的方向以云台指向的方向为x,采用右手系(x指向正北时y在正东)
     static float sin_theta, cos_theta;
-    cos_theta = arm_cos_f32(chassis_cmd_recv.offset_angle * DEGREE_2_RAD);
-    sin_theta = arm_sin_f32(chassis_cmd_recv.offset_angle * DEGREE_2_RAD);
+    float rotate_angle = chassis_cmd_recv.offset_angle;
+    // 在CHASSIS_FOLLOW_GIMBAL_YAW模式下,vx/vy不要再用 offset_angle 旋转
+    if (chassis_cmd_recv.chassis_mode == CHASSIS_FOLLOW_GIMBAL_YAW)
+    {
+        rotate_angle = 0.0f;
+    }
+
+    cos_theta = arm_cos_f32(rotate_angle * DEGREE_2_RAD);
+    sin_theta = arm_sin_f32(rotate_angle * DEGREE_2_RAD);
+
     chassis_vx = chassis_cmd_recv.vx * cos_theta - chassis_cmd_recv.vy * sin_theta;
     chassis_vy = chassis_cmd_recv.vx * sin_theta + chassis_cmd_recv.vy * cos_theta;
-
     // 根据控制模式进行正运动学解算,计算底盘输出
     MecanumCalculate();
 
