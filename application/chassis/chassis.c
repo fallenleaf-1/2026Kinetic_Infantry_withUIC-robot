@@ -62,6 +62,9 @@ static float chassis_vx, chassis_vy;                      // 将云台系的速�
 static float vt_lf, vt_rf, vt_lb, vt_rb;                  // 底盘电机速度解算后的临时输出,待进行限幅
 static float angle_lf, angle_rf, angle_lb, angle_rb;      // 底盘舵机角度解算后的临时输出,待进行限幅
 
+// 底盘跟随PID
+static PIDInstance Chassis_Follow_PID;
+
 void ChassisInit()
 {
     gimba_IMU_data = INS_Init(); // IMU先初始化,获取云台姿态数据指针
@@ -148,6 +151,19 @@ void ChassisInit()
     chassis_GM6020_motor_config.can_init_config.tx_id = 7;  // 左后 对应4号轮向电机
     servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
 
+    // 底盘跟随PID初始化
+    PID_Init_Config_s Chassis_Follow_PID_config = {
+        .Kp = -5.0f,
+        .Ki = -0.0f,
+        .Kd = 0.0f,
+        .IntegralLimit = 100.0f,
+        .MaxOut = 5000.0f,
+        .DeadBand = 0.0f,
+        .CoefA = 0.0f,
+        .CoefB = 0.0f,
+        .Improve = PID_Trapezoid_Intergral | PID_ChangingIntegrationRate,
+    };
+    PIDInit(&Chassis_Follow_PID, &Chassis_Follow_PID_config);
 
 //     referee_data = UITaskInit(&huart6, &ui_data); // 裁判系统初始化,会同时初始化UI
 
@@ -403,21 +419,23 @@ void ChassisTask()
     case CHASSIS_NO_FOLLOW: // 底盘不旋转,但维持全向机动,一般用于调整云台姿态
         chassis_cmd_recv.wz = 0;
         break;
-    case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,采用融合滤波  参数待调试
-        float angle_error = Normalize180(chassis_cmd_recv.offset_angle);
-        // P+D控制
-        static float kp = 5.0f , pd = 0.4f;
-        float wz = kp * angle_error - pd * gimba_IMU_data->Gyro[2];
-        // 低通滤波
-        static float wz_lpf = 0.0f;
-        wz_lpf = wz_lpf + 0.1f * (wz - wz_lpf);  // 系数越小越稳，越大响应越快 0.1~0.3
+    case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,采用PID  参数待调试
+        chassis_cmd_recv.wz = PIDCalculate(&Chassis_Follow_PID, chassis_cmd_recv.offset_angle, 0.0f);
+
+        // float angle_error = Normalize180(chassis_cmd_recv.offset_angle);
+        // // P+D控制
+        // static float kp = 5.0f , pd = 0.4f;
+        // float wz = kp * angle_error - pd * gimba_IMU_data->Gyro[2];
+        // // 低通滤波
+        // static float wz_lpf = 0.0f;
+        // wz_lpf = wz_lpf + 0.1f * (wz - wz_lpf);  // 系数越小越稳，越大响应越快 0.1~0.3
         
-        float wz_final = wz_lpf;
-        // 小角度补偿
-        if(fabs(wz_final) < 6.0f && fabs(angle_error) > 0.5f) // 死区不补偿
-            wz_final = (wz_final > 0) ? 6.0f : -6.0f; // 最小补偿值
-        wz_final = CLAMP(wz_final, -600.0f, 600.0f); // 限幅
-        chassis_cmd_recv.wz = wz_final;
+        // float wz_final = wz_lpf;
+        // // 小角度补偿
+        // if(fabs(wz_final) < 6.0f && fabs(angle_error) > 0.5f) // 死区不补偿
+        //     wz_final = (wz_final > 0) ? 6.0f : -6.0f; // 最小补偿值
+        // wz_final = CLAMP(wz_final, -600.0f, 600.0f); // 限幅
+        // chassis_cmd_recv.wz = wz_final;
 
         break;
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
