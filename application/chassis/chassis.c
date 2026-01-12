@@ -44,6 +44,7 @@ static Subscriber_t *chassis_sub;                   // 用于订阅底盘的控�
 #endif                                              // !ONE_BOARD
 static Chassis_Ctrl_Cmd_s chassis_cmd_recv;         // 底盘接收到的控制命令
 static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数据
+static attitude_t *gimba_IMU_data; // 云台IMU数据
 
 static PIDInstance buffer_PID;             // 用于底盘的缓冲能量PID
 static referee_info_t *referee_data;       // 用于获取裁判系统的数据
@@ -63,6 +64,8 @@ static float angle_lf, angle_rf, angle_lb, angle_rb;      // 底盘舵机角度�
 
 void ChassisInit()
 {
+    gimba_IMU_data = INS_Init(); // IMU先初始化,获取云台姿态数据指针
+
     // 四个轮子的参数一样,改tx_id和反转标志位即可
     Motor_Init_Config_s chassis_M3508_motor_config = {
         .can_init_config.can_handle = &hcan1,
@@ -285,11 +288,11 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
         // 再基于多圈差值判断是否需要翻转驱动方向（优劣弧）
         float angle_diff = Normalize180(*targets[i] - cur_total);
 
-        if (chassis_cmd_recv.chassis_mode == CHASSIS_FOLLOW_GIMBAL_YAW)
-        {
-            steering_dirt[i] = base_dir[i];
-            continue;   //CHASSIS_FOLLOW_GIMBAL_YAW模式直接跳过翻转判断
-        }
+        // if (chassis_cmd_recv.chassis_mode == CHASSIS_FOLLOW_GIMBAL_YAW)
+        // {
+        //     steering_dirt[i] = base_dir[i];
+        //     continue;   //CHASSIS_FOLLOW_GIMBAL_YAW模式直接跳过翻转判断
+        // }
 
         if (angle_diff > 90.0f)
         {
@@ -400,11 +403,19 @@ void ChassisTask()
     case CHASSIS_NO_FOLLOW: // 底盘不旋转,但维持全向机动,一般用于调整云台姿态
         chassis_cmd_recv.wz = 0;
         break;
-    case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,不单独设置pid,以误差角度平方为速度输出
+    case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,采用融合滤波  参数待调试
         float angle_error = Normalize180(chassis_cmd_recv.offset_angle);
-        float wz = 0.1f * angle_error * abs(angle_error);
-        wz = CLAMP(wz, -600.0f, 600.0f); // 限幅防止过快旋转
-        chassis_cmd_recv.wz = wz;
+        // P+D控制
+        static float kp = 0.5f , pd = 0.00f;
+        float wz = kp * angle_error - pd * gimba_IMU_data->Gyro[2];
+        // 低通滤波
+        static float wz_lpf = 0.0f;
+        wz_lpf = wz_lpf + 0.1f * (wz - wz_lpf);  // 系数越小越稳，越大响应越快 0.1~0.3
+        
+        float wz_final = wz_lpf;
+        // 小角度补偿
+        if(fabs(wz_final) < 6.0f && fabs(angle_error) > 0.5f) // 死区不补偿
+            wz_final = (wz_final > 0) ? 6.0f : -6.0f; // 最小补偿值
 
         break;
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
@@ -418,6 +429,7 @@ void ChassisTask()
     // 底盘逆时针旋转为角度正方向;云台命令的方向以云台指向的方向为x,采用右手系(x指向正北时y在正东)
     static float sin_theta, cos_theta;
     float rotate_angle = chassis_cmd_recv.offset_angle;
+
     // 在CHASSIS_FOLLOW_GIMBAL_YAW模式下,vx/vy不要再用 offset_angle 旋转
     if (chassis_cmd_recv.chassis_mode == CHASSIS_FOLLOW_GIMBAL_YAW)
     {
