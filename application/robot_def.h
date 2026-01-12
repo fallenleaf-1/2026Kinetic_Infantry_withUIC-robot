@@ -27,8 +27,8 @@
 /* 机器人重要参数定义,注意根据不同机器人进行修改,浮点数需要以.0或f结尾,无符号以u结尾 */
 // 云台参数
 
-#define YAW_CHASSIS_ALIGN_ECD 6024     // 云台和底盘对齐指向相同方向时的电机编码器值,若对云台有机械改动需要修改
-#define YAW_ECD_GREATER_THAN_4096 1 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算云台偏转角度
+#define YAW_CHASSIS_ALIGN_ECD 4085     // 云台和底盘对齐指向相同方向时的电机编码器值,若对云台有机械改动需要修改
+#define YAW_ECD_GREATER_THAN_4096 0 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算云台偏转角度
 #define PITCH_HORIZON_ECD 3412      // 云台处于水平位置时编码器值,若对云台有机械改动需要修改
 #define PITCH_MAX_ANGLE 45.0f           // 云台竖直方向最大角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
 #define PITCH_MIN_ANGLE -45.0f           // 云台竖直方向最小角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
@@ -47,10 +47,10 @@
 #define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
 #define CHASSIS_DEAD_BAND 10   // 底盘速度死区,低于该值的速度指令将被置为0
 //四个驱动电机朝向前方时 转向电机初始编码值
-#define GM6020_LF_ANGLE  73.87f		//装上去的时候Y轴正向对应的角度
-#define GM6020_RF_ANGLE -10.90f
-#define GM6020_LB_ANGLE -11.60f
-#define GM6020_RB_ANGLE -105.03f
+#define GM6020_LF_ANGLE 197.09f		//装上去的时候Y轴正向对应的角度
+#define GM6020_RF_ANGLE 346.51f
+#define GM6020_LB_ANGLE 45.70f
+#define GM6020_RB_ANGLE 134.38f
 
 #define GYRO2GIMBAL_DIR_YAW 1   // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
 #define GYRO2GIMBAL_DIR_PITCH 1 // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反

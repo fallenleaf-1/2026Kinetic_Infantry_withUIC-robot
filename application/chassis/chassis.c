@@ -406,7 +406,7 @@ void ChassisTask()
     case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,采用融合滤波  参数待调试
         float angle_error = Normalize180(chassis_cmd_recv.offset_angle);
         // P+D控制
-        static float kp = 0.5f , pd = 0.00f;
+        static float kp = 5.0f , pd = 0.4f;
         float wz = kp * angle_error - pd * gimba_IMU_data->Gyro[2];
         // 低通滤波
         static float wz_lpf = 0.0f;
@@ -416,6 +416,8 @@ void ChassisTask()
         // 小角度补偿
         if(fabs(wz_final) < 6.0f && fabs(angle_error) > 0.5f) // 死区不补偿
             wz_final = (wz_final > 0) ? 6.0f : -6.0f; // 最小补偿值
+        wz_final = CLAMP(wz_final, -600.0f, 600.0f); // 限幅
+        chassis_cmd_recv.wz = wz_final;
 
         break;
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
