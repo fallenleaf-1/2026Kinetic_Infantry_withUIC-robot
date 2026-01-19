@@ -155,7 +155,8 @@ application/gimbal/gimbal.c \
 application/chassis/chassis.c \
 application/shoot/shoot.c \
 application/cmd/robot_cmd.c \
-application/robot.c
+application/robot.c \
+modules/master_machine/ROScrc16.c
 
 # ASM sources
 ASM_SOURCES =  \

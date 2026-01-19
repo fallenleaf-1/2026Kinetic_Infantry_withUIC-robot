@@ -1,8 +1,9 @@
 #ifndef MASTER_PROCESS_H
 #define MASTER_PROCESS_H
 
+#include <stdbool.h>
+
 #include "bsp_usart.h"
-#include "seasky_protocol.h"
 
 #define VISION_RECV_SIZE 18u // 当前为固定值,36字节
 #define VISION_SEND_SIZE 36u
@@ -10,54 +11,31 @@
 #pragma pack(1)
 typedef enum
 {
-	NO_FIRE = 0,
-	AUTO_FIRE = 1,
-	AUTO_AIM = 2
+	NO_FIRE = 0,    // 无射击
+	AUTO_FIRE = 1,  // 自动射击
+	AUTO_AIM = 2    // 自动瞄准
 } Fire_Mode_e;
 
 typedef enum
 {
-	NO_TARGET = 0,
-	TARGET_CONVERGING = 1,
-	READY_TO_FIRE = 2
+	NO_TARGET = 0,           // 无目标
+	TARGET_CONVERGING = 1,   // 目标收敛中
+	READY_TO_FIRE = 2        // 准备射击
 } Target_State_e;
 
-typedef enum
-{
-	NO_TARGET_NUM = 0,
-	HERO1 = 1,
-	ENGINEER2 = 2,
-	INFANTRY3 = 3,
-	INFANTRY4 = 4,
-	INFANTRY5 = 5,
-	OUTPOST = 6,
-	SENTRY = 7,
-	BASE = 8
-} Target_Type_e;
-
-typedef struct
-{
-	Fire_Mode_e fire_mode;
-	Target_State_e target_state;
-	Target_Type_e target_type;
-
-	float pitch;
-	float yaw;
-} Vision_Recv_s;
 
 typedef enum
 {
-	COLOR_NONE = 0,
-	COLOR_BLUE = 1,
-	COLOR_RED = 2,
-} Enemy_Color_e;
+	COLOR_BLUE = 0,
+	COLOR_RED = 1,
+} Enemy_Color_e;	// 敌方颜色枚举
 
 typedef enum
 {
-	VISION_MODE_AIM = 0,
-	VISION_MODE_SMALL_BUFF = 1,
-	VISION_MODE_BIG_BUFF = 2
-} Work_Mode_e;
+	VISION_MODE_AIM = 0,		// 自动瞄准模式
+	VISION_MODE_SMALL_BUFF = 1,	// 小符模式：小能量机关
+	VISION_MODE_BIG_BUFF = 2	// 大符模式：大能量机关
+} Work_Mode_e;	// 视觉工作模式枚举
 
 typedef enum
 {
@@ -67,18 +45,92 @@ typedef enum
 	BIG_AMU_16 = 16,
 	SMALL_AMU_18 = 18,
 	SMALL_AMU_30 = 30,
-} Bullet_Speed_e;
+} Bullet_Speed_e; // 子弹速度枚举
+
+typedef enum
+{
+	ARMOR_OUTPOST = 0,  // 前哨站
+    ARMOR_HERO = 1,     // 英雄
+    ARMOR_ENGINEER = 2, // 工程
+    ARMOR_INFANTRY3 = 3,// 步兵3
+    ARMOR_INFANTRY4 = 4,// 步兵4
+    ARMOR_INFANTRY5 = 5,// 步兵5
+    ARMOR_GUARD = 6,    // 哨兵
+    ARMOR_BASE = 7  // 基地
+} ARMOR_ID; // ARMOR_ID枚举
+
+typedef enum
+{
+    ARMOR_NUM_BALANCE = 2,  // 平衡步兵
+    ARMOR_NUM_OUTPOST = 3,  // 前哨站
+    ARMOR_NUM_NORMAL = 4    // 普通步兵
+}ARMOR_NUM;  // 装甲板数量
 
 typedef struct
 {
-	Enemy_Color_e enemy_color;
-	Work_Mode_e work_mode;
-	Bullet_Speed_e bullet_speed;
-
-	float yaw;
-	float pitch;
+	float aim_x;
+	float aim_y;
+	float aim_z;
 	float roll;
-} Vision_Send_s;
+	float pitch;
+	float yaw;
+	Enemy_Color_e enemy_color;
+	bool reset_tracking;
+} Vision_Send_s;	// 发给视觉的 数据 结构体
+
+typedef struct
+{
+    uint8_t header;   // 0x5A
+	bool reset_tracking : 1;
+	uint8_t detect_color : 1; // 0:red 1:blue
+	uint8_t reserved : 6;
+    float aim_x;
+    float aim_y;
+    float aim_z;
+	float roll;
+    float pitch;
+    float yaw;
+    uint16_t checksum;
+} Vision_Send_Packet_t; // 发给视觉 数据包 结构体
+
+typedef struct
+{
+	bool tracking; // 是否有目标 
+	ARMOR_ID armor_id; // 目标ID 
+	ARMOR_NUM armor_num; // 装甲板数量
+	float x;				// 目标x坐标
+	float y;				// 目标y坐标
+	float z;				// 目标z坐标
+	float yaw;				// 目标yaw角度
+	float vx;				// 目标x方向速度
+	float vy;				// 目标y方向速度
+	float vz;				// 目标z方向速度
+	float v_yaw;			// 目标yaw角速度
+	float r1;				// 目标中心到前后装甲板的距离
+	float r2;				// 目标中心到左右装甲板的距离
+	float dz;				// 另一对装甲板的相对于被跟踪装甲板的高度差
+} Vision_Recv_s;	// 从视觉接收的 数据 结构体
+
+typedef struct
+{
+    uint8_t header;        // 0xA5
+    uint8_t tracking : 1;    // 是否有目标
+	uint8_t id : 3;  // 目标ID
+	uint8_t armors_num : 3; // 装甲板数量
+    uint8_t reserved : 1;
+	float x;
+    float y;
+    float z;
+    float yaw;
+    float vx;
+    float vy;
+    float vz;
+    float v_yaw;
+    float r1;
+    float r2;
+    float dz;
+    uint16_t checksum;		//CRC16校验值
+} Vision_Recv_Packet_t; // 从视觉接收 数据包 结构体
 #pragma pack()
 
 /**
@@ -88,27 +140,10 @@ typedef struct
  */
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
 
-/**
- * @brief 发送视觉数据
- *
- */
+// 视觉数据填充接口
+void setVisionSendData_rpy(float roll,float pitch,float yaw);
+void setVisionSendData_aim(float aim_x,float aim_y,float aim_z);
+// 发送视觉数据
 void VisionSend();
-
-/**
- * @brief 设置视觉发送标志位
- *
- * @param enemy_color
- * @param work_mode
- * @param bullet_speed
- */
-void VisionSetFlag(Enemy_Color_e enemy_color, Work_Mode_e work_mode, Bullet_Speed_e bullet_speed);
-
-/**
- * @brief 设置发送数据的姿态部分
- *
- * @param yaw
- * @param pitch
- */
-void VisionSetAltitude(float yaw, float pitch, float roll);
 
 #endif // !MASTER_PROCESS_H

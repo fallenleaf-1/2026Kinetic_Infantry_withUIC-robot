@@ -176,7 +176,6 @@ void INS_Task(void)
         INS.attitude.Yaw = INS.Yaw;
         INS.attitude.YawTotalAngle = INS.YawTotalAngle;
 
-        VisionSetAltitude(INS.Yaw, INS.Pitch, INS.Roll);
     }
 
     // temperature control
