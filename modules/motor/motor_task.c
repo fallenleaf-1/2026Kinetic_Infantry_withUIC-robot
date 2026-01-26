@@ -5,6 +5,7 @@
 #include "step_motor.h"
 #include "servo_motor.h"
 #include "power_control.h"
+#include "dmmotor.h"
 
 void MotorControlTask()
 {

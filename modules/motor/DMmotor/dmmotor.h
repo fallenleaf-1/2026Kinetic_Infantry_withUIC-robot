@@ -5,15 +5,22 @@
 #include "controller.h"
 #include "motor_def.h"
 #include "daemon.h"
+/*#include "stdint.h" */
 
 #define DM_MOTOR_CNT 4
 
-#define DM_P_MIN  (-12.5f)
-#define DM_P_MAX  12.5f
-#define DM_V_MIN  (-45.0f)
-#define DM_V_MAX  45.0f
-#define DM_T_MIN  (-18.0f)
-#define DM_T_MAX   18.0f
+
+
+#define DM_P_MIN  (-PI)
+#define DM_P_MAX  PI
+#define DM_V_MIN  (-200.0f)
+#define DM_V_MAX  200.0f
+#define DM_T_MIN  (-54.0f)
+#define DM_T_MAX   54.0f
+#define KP_MIN 0.0f
+#define KP_MAX 500.0f
+#define KD_MIN 0.0f
+#define KD_MAX 5.0f
 
 typedef struct 
 {
@@ -25,7 +32,11 @@ typedef struct
     float torque;
     float T_Mos;
     float T_Rotor;
+
+    float angle_single_round; // 单圈角度
+    float total_angle;   // 总角度,注意方向
     int32_t total_round;
+
 }DM_Motor_Measure_s;
 
 typedef struct
@@ -36,6 +47,13 @@ typedef struct
     uint16_t Kp;
     uint16_t Kd;
 }DMMotor_Send_s;
+
+typedef enum
+{
+    current_mode = 0,
+    MIT_mode = 1
+} Motor_Control_Type_e;
+
 typedef struct 
 {
     DM_Motor_Measure_s measure;
@@ -45,13 +63,19 @@ typedef struct
     PIDInstance angle_PID;
     float *other_angle_feedback_ptr;
     float *other_speed_feedback_ptr;
-    float *speed_feedforward_ptr;
-    float *current_feedforward_ptr;
+    float Omega_feedforward;
+    float Current_feedforward;
     float pid_ref;
+    float MIT_Kp;
+    float MIT_Kd;
+    float MIT_ref_angle;
+    float MIT_ref_speed;
+    float MIT_ref_torque;
     Motor_Working_Type_e stop_flag;
     CANInstance *motor_can_instace;
     DaemonInstance* motor_daemon;
     uint32_t lost_cnt;
+    Motor_Control_Type_e working_type;
 }DMMotorInstance;
 
 typedef enum
@@ -62,6 +86,7 @@ typedef enum
     DM_CMD_CLEAR_ERROR = 0xfb // 清除电机过热错误
 }DMMotor_Mode_e;
 
+void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor);
 DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config);
 
 void DMMotorSetRef(DMMotorInstance *motor, float ref);
@@ -73,4 +98,14 @@ void DMMotorEnable(DMMotorInstance *motor);
 void DMMotorStop(DMMotorInstance *motor);
 void DMMotorCaliEncoder(DMMotorInstance *motor);
 void DMMotorControlInit();
+
+void DMMotorSetMITAngle(DMMotorInstance *motor, float angle);
+void DMMotorSetMITSpeed(DMMotorInstance *motor, float speed);
+void DMMotorSetMITTorque(DMMotorInstance *motor, float torque);
+void DMMotorSetSpeedFeedForward(DMMotorInstance *motor, float speed_feedforward);
+void DMMotorSetCurrentFeedForward(DMMotorInstance *motor, float current_feedforward);
+
+void DMMotorTask(void const *argument);
+
+DMMotorInstance *MITMotorInit(Motor_Init_Config_s *config);
 #endif // !DMMOTOR

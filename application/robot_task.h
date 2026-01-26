@@ -14,6 +14,7 @@
 #include "daemon.h"
 #include "HT04.h"
 #include "buzzer.h"
+#include "dmmotor.h"
 
 #include "bsp_log.h"
 
@@ -51,6 +52,7 @@ void OSTaskInit()
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
 
+    DMMotorControlInit(); // 没有注册DM电机则不会执行
     HTMotorControlInit(); // 没有注册HT电机则不会执行
 }
 

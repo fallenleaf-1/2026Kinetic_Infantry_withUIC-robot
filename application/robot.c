@@ -36,7 +36,7 @@ void RobotInit()
 #endif
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
-    ChassisInit();
+    // ChassisInit();
 #endif
 
     OSTaskInit(); // 创建基础任务
@@ -54,7 +54,7 @@ void RobotTask()
 #endif
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
-    ChassisTask();
+    // ChassisTask();
 #endif
 
 }

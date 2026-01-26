@@ -15,7 +15,8 @@
 #include "bsp_log.h"
 
 // 私有宏,自动将编码器转换成角度值
-#define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360
+#define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 大YAW对齐时的角度,0-360
+#define SMALL_YAW_ALIGN_ANGLE (SMALL_YAW_FORWORD_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 小YAW对齐时的角度,0-360
 #define PTICH_HORIZON_ANGLE (PITCH_HORIZON_ECD * ECD_ANGLE_COEF_DJI) // pitch水平时电机的角度,0-360
 /* cmd应用包含的模块实例指针和交互信息存储*/
 #ifdef GIMBAL_BOARD // 对双板的兼容,条件编译
@@ -48,7 +49,6 @@ static Robot_Status_e robot_state; // 机器人整体工作状态
 
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
-
 
 BuzzzerInstance* robocmd_alarm;
 /** 
@@ -134,7 +134,7 @@ void RobotCMDInit()
     };
     cmd_can_comm = CANCommInit(&comm_conf);
 #endif // GIMBAL_BOARD
-    gimbal_cmd_send.pitch = 0;
+    gimbal_cmd_send.pitch = 0.0f;
 
     robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
     AlarmInit();
@@ -150,7 +150,7 @@ static void CalcOffsetAngle()
     // 别名angle提高可读性,不然太长了不好看,虽然基本不会动这个函数
     static float angle;
     angle = gimbal_fetch_data.yaw_motor_single_round_angle; // 从云台获取的当前yaw电机单圈角度
-#if YAW_ECD_GREATER_THAN_4096                               // 如果大于180度
+#if YAW_ECD_GREATER_THAN_4096                           // 如果大于180度
     if (angle > YAW_ALIGN_ANGLE && angle <= 180.0f + YAW_ALIGN_ANGLE)
         chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
     else if (angle > 180.0f + YAW_ALIGN_ANGLE)
@@ -233,7 +233,7 @@ static void RemoteControlSet()
         float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input;
+        gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input; // rad
         // 云台pitch限位
         if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
         {
@@ -255,10 +255,16 @@ static void RemoteControlSet()
 
         // 死区判断
         float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
-        float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
+        // float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
+        
+        // 测试将Picth遥控给小YAW
+        float gimbal_small_yaw_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
+        
+        // 系数需要调整
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input;
+        // gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input;
+        gimbal_cmd_send.small_yaw  += 0.00025f * gimbal_small_yaw_input;
         // 云台pitch限位
         if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
         {
@@ -267,6 +273,15 @@ static void RemoteControlSet()
         else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
         {
             gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
+        }
+        // 云台小YAW限位
+        if(gimbal_cmd_send.small_yaw > SMALL_YAW_MAN_ANGLE)
+        {
+            gimbal_cmd_send.small_yaw = SMALL_YAW_MAN_ANGLE;
+        }
+        else if (gimbal_cmd_send.small_yaw < SMALL_YAW_MIN_ANGLE)
+        {
+            gimbal_cmd_send.small_yaw = SMALL_YAW_MIN_ANGLE;
         }
 
         // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整

@@ -20,6 +20,13 @@
 #include "general_def.h"
 #include "master_process.h"
 
+#include "robot_def.h"
+#include "gimbal.h"
+
+// 私有宏,自动将编码器转换成角度值
+#define ECD_ANGLE_COEF_DJI 0.043945f // (360/8192),将编码器值转化为角度制
+#define SMALL_YAW_ALIGN_ANGLE (SMALL_YAW_FORWORD_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360
+
 static INS_t INS;
 static IMU_Param_t IMU_Param;
 static PIDInstance TempCtrl = {0};
@@ -48,6 +55,32 @@ static void IMU_Temperature_Ctrl(void)
 {
     PIDCalculate(&TempCtrl, BMI088.Temperature, RefTemp);
     IMUPWMSet(float_constrain(float_rounding(TempCtrl.Output), 0, UINT32_MAX));
+}
+
+static float CalcOffsetAngle()
+{
+    // 别名angle提高可读性,不然太长了不好看,虽然基本不会动这个函数
+    static float angle;
+    static float offset_angle;
+    angle = small_yaw_motor->measure.angle_single_round; // 获取的当前yaw电机单圈角度
+#if SMALL_YAW_ECD_GREATER_THAN_4096                               // 如果大于180度
+    if (angle > SMALL_YAW_ALIGN_ANGLE && angle <= 180.0f + SMALL_YAW_ALIGN_ANGLE)
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
+    else if (angle > 180.0f + SMALL_YAW_ALIGN_ANGLE)
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE - 360.0f;
+    else
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
+    
+#else // 小于180度
+    if (angle > SMALL_YAW_ALIGN_ANGLE)
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
+    else if (angle <= SMALL_YAW_ALIGN_ANGLE && angle >= SMALL_YAW_ALIGN_ANGLE - 180.0f)
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
+    else
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE + 360.0f;
+
+#endif
+    return offset_angle;
 }
 
 // 使用加速度计的数据初始化Roll和Pitch,而Yaw置0,这样可以避免在初始时候的姿态估计误差
@@ -169,12 +202,15 @@ void INS_Task(void)
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
 
         // 为最终姿态数据赋值
+        static float offset_small_yaw;
         memccpy(INS.attitude.Gyro, INS.Gyro, 0, sizeof(INS.Gyro));
         memccpy(INS.attitude.Accel, INS.Accel, 0, sizeof(INS.Accel));
         INS.attitude.Roll = INS.Roll;
         INS.attitude.Pitch = INS.Pitch;
         INS.attitude.Yaw = INS.Yaw;
         INS.attitude.YawTotalAngle = INS.YawTotalAngle;
+        offset_small_yaw = CalcOffsetAngle();
+        INS.attitude.Big_Yaw_Feed = INS.Yaw - offset_small_yaw;  //IMU YAW - 小yaw偏角
 
     }
 

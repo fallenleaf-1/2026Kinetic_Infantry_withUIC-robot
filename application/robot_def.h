@@ -26,12 +26,15 @@
 
 /* 机器人重要参数定义,注意根据不同机器人进行修改,浮点数需要以.0或f结尾,无符号以u结尾 */
 // 云台参数
-
-#define YAW_CHASSIS_ALIGN_ECD 4085     // 云台和底盘对齐指向相同方向时的电机编码器值,若对云台有机械改动需要修改
-#define YAW_ECD_GREATER_THAN_4096 0 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算云台偏转角度
+#define SMALL_YAW_FORWORD_ALIGN_ECD 2694   //小YAW电机超前时的编码器数值
+#define SMALL_YAW_ECD_GREATER_THAN_4096 0 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算小yaw偏转角度
+#define YAW_CHASSIS_ALIGN_ECD 5110     // 云台和底盘对齐指向相同方向时的电机编码器值,若对云台有机械改动需要修改
+#define YAW_ECD_GREATER_THAN_4096 1 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算云台偏转角度
 #define PITCH_HORIZON_ECD 3412      // 云台处于水平位置时编码器值,若对云台有机械改动需要修改
-#define PITCH_MAX_ANGLE 45.0f           // 云台竖直方向最大角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
-#define PITCH_MIN_ANGLE -45.0f           // 云台竖直方向最小角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
+#define PITCH_MAX_ANGLE    180.0 // 从DM上位机获取，将rad转为角度制
+#define PITCH_MIN_ANGLE    -180.0 // 从DM上位机获取，将rad转为角度制
+#define SMALL_YAW_MAN_ANGLE 30.0f       // 小YAW最大角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
+#define SMALL_YAW_MIN_ANGLE -30.0f      // 小YAW最小角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
 #define GIMBAL_DEAD_BAND 10        // 云台控制死区,低于该值的遥控器输入将被置为0
 // 发射参数
 #define ONE_BULLET_DELTA_ANGLE 36    // 发射一发弹丸拨盘转动的距离,由机械设计图纸给出
@@ -161,9 +164,12 @@ typedef struct
 // cmd发布的云台控制数据,由gimbal订阅
 typedef struct
 { // 云台角度控制
+    float small_yaw;
     float yaw;
     float pitch;
     float chassis_rotate_wz;
+    float DM_ENABLE_FLAG;
+    float pitch_omega_feedforword;
 
     gimbal_mode_e gimbal_mode;
 } Gimbal_Ctrl_Cmd_s;

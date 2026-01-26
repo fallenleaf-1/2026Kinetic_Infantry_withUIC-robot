@@ -106,7 +106,10 @@ typedef enum
     M2006,
     LK9025,
     HT04,
+    DMMotor,
 } Motor_Type_e;
+
+
 
 /**
  * @brief 电机控制器初始化结构体,包括三环PID的配置以及两个反馈数据来源指针
@@ -124,7 +127,14 @@ typedef struct
     PID_Init_Config_s current_PID;
     PID_Init_Config_s speed_PID;
     PID_Init_Config_s angle_PID;
+
+    // DM MIT模式用
+    float DM_MIT_Kp;
+    float DM_MIT_Kd;
+    float K_g;      // 重力补偿系数
+
 } Motor_Controller_Init_s;
+
 
 /* 用于初始化CAN电机的结构体,各类电机通用 */
 typedef struct
@@ -134,5 +144,13 @@ typedef struct
     Motor_Type_e motor_type;
     CAN_Init_Config_s can_init_config;
 } Motor_Init_Config_s;
+
+typedef struct 
+{
+    Motor_Reverse_Flag_e motor_reverse_flag;       // 是否反转
+    Motor_Type_e motor_type;
+    CAN_Init_Config_s can_init_config;
+    
+}MIT_Init_Config_s;
 
 #endif // !MOTOR_DEF_H
