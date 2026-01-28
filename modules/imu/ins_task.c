@@ -202,15 +202,13 @@ void INS_Task(void)
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
 
         // 为最终姿态数据赋值
-        static float offset_small_yaw;
         memccpy(INS.attitude.Gyro, INS.Gyro, 0, sizeof(INS.Gyro));
         memccpy(INS.attitude.Accel, INS.Accel, 0, sizeof(INS.Accel));
         INS.attitude.Roll = INS.Roll;
         INS.attitude.Pitch = INS.Pitch;
         INS.attitude.Yaw = INS.Yaw;
         INS.attitude.YawTotalAngle = INS.YawTotalAngle;
-        offset_small_yaw = CalcOffsetAngle();
-        INS.attitude.Big_Yaw_Feed = INS.Yaw - offset_small_yaw;  //IMU YAW - 小yaw偏角
+        INS.attitude.Big_Yaw_Feed = INS.Yaw - CalcOffsetAngle();  //IMU YAW - 小yaw偏角
 
     }
 

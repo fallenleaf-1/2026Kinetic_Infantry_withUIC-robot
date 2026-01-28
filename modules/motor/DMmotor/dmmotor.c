@@ -223,19 +223,19 @@ void DMMotorTask(void const *argument)
             if (motor_setting->angle_feedback_source == OTHER_FEED)
                 pid_measure = *motor->other_angle_feedback_ptr;
             else
-                pid_measure = measure->total_angle; // MOTOR_FEED,对total angle闭环,防止在边界处出现突跃
+                pid_measure = measure->position; // MOTOR_FEED,对total angle闭环,防止在边界处出现突跃
             // 更新pid_ref进入下一个环
             pid_ref = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref);
         }
 
-        pid_ref = pid_ref + motor->Omega_feedforward; // 速度前馈
+        // pid_ref = pid_ref + motor->Omega_feedforward; // 速度前馈
 
         if ((setting->close_loop_type & SPEED_LOOP) && (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
             {
                 if (setting->speed_feedback_source == OTHER_FEED)
                     pid_measure = *motor->other_speed_feedback_ptr;
                 else
-                    pid_measure = measure->velocity; // MOTOR_FEED,对total angle闭环,防止在边界处出现突跃
+                    pid_measure = measure->velocity;
                 pid_ref = PIDCalculate(&motor->speed_PID, pid_measure, pid_ref);
             }
 

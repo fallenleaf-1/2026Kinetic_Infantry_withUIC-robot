@@ -10,6 +10,7 @@
 #include "dji_motor.h"
 #include "bmi088.h"
 #include "buzzer.h"
+#include "solvetrajectory.h"
 // bsp
 #include "bsp_dwt.h"
 #include "bsp_log.h"
@@ -44,6 +45,11 @@ static Publisher_t *shoot_cmd_pub;           // 发射控制消息发布者
 static Subscriber_t *shoot_feed_sub;         // 发射反馈信息订阅者
 static Shoot_Ctrl_Cmd_s shoot_cmd_send;      // 传递给发射的控制信息
 static Shoot_Upload_Data_s shoot_fetch_data; // 从发射获取的反馈信息
+
+static Publisher_t *solvetrajectory_need_pub;   // 弹道解算所需消息发布者
+static Subscriber_t *solvetrajectory_feed_sub;  // 弹道解算反馈信息订阅者
+static SolveTrajectory_Recv_s solvetrajectory_need_data; // 弹道解算所需信息
+static SolveTrajectory_Send_s solvetrajectory_fetch_data; // 弹道解算获取的反馈信息
 
 static Robot_Status_e robot_state; // 机器人整体工作状态
 
@@ -117,6 +123,8 @@ void RobotCMDInit()
     gimbal_feed_sub = SubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
     shoot_cmd_pub = PubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
     shoot_feed_sub = SubRegister("shoot_feed", sizeof(Shoot_Upload_Data_s));
+    solvetrajectory_need_pub = PubRegister("SolveTrajectory_need",sizeof(SolveTrajectory_Recv_s));
+    solvetrajectory_feed_sub = SubRegister("SolveTrajectory_feed",sizeof(SolveTrajectory_Send_s));
 
 #ifdef ONE_BOARD // 双板兼容
     chassis_cmd_pub = PubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
@@ -134,7 +142,9 @@ void RobotCMDInit()
     };
     cmd_can_comm = CANCommInit(&comm_conf);
 #endif // GIMBAL_BOARD
+
     gimbal_cmd_send.pitch = 0.0f;
+    gimbal_cmd_send.yaw = YAW_ALIGN_ANGLE;
 
     robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
     AlarmInit();
@@ -145,10 +155,11 @@ void RobotCMDInit()
  *        单圈绝对角度的范围是0~360,说明文档中有图示
  *
  */
-static void CalcOffsetAngle()
+static float CalcOffsetAngle()
 {
     // 别名angle提高可读性,不然太长了不好看,虽然基本不会动这个函数
     static float angle;
+    static float offset_angle;
     angle = gimbal_fetch_data.yaw_motor_single_round_angle; // 从云台获取的当前yaw电机单圈角度
 #if YAW_ECD_GREATER_THAN_4096                           // 如果大于180度
     if (angle > YAW_ALIGN_ANGLE && angle <= 180.0f + YAW_ALIGN_ANGLE)
@@ -158,6 +169,7 @@ static void CalcOffsetAngle()
     else
         chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
 
+    offset_angle = chassis_cmd_send.offset_angle;
     // 保证在不跟随模式下offset_angle为0,确保底盘舵向电机角度解算不受yaw影响
     if(chassis_cmd_send.chassis_mode == CHASSIS_NO_FOLLOW)
     {
@@ -172,12 +184,38 @@ static void CalcOffsetAngle()
     else
         chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE + 360.0f;
 
+    offset_angle = chassis_cmd_send.offset_angle;
     // 保证在不跟随模式下offset_angle为0,确保底盘舵向电机角度解算不受yaw影响
     if(chassis_cmd_send.chassis_mode == CHASSIS_NO_FOLLOW)
     {
         chassis_cmd_send.offset_angle = 0.0f;
     }
 #endif
+    return offset_angle;
+}
+
+void GetSolvetrajectory_need_data()
+{
+    // 视觉数据
+    solvetrajectory_need_data.tracking = vision_recv_data->tracking;
+    solvetrajectory_need_data.xw = vision_recv_data->x;
+    solvetrajectory_need_data.yw = vision_recv_data->y;
+    solvetrajectory_need_data.zw = vision_recv_data->z;
+    solvetrajectory_need_data.vxw = vision_recv_data->vx;
+    solvetrajectory_need_data.vyw = vision_recv_data->vy;
+    solvetrajectory_need_data.vzw = vision_recv_data->vz;
+    solvetrajectory_need_data.tar_yaw = vision_recv_data->yaw;
+    solvetrajectory_need_data.v_yaw = vision_recv_data->v_yaw;
+    solvetrajectory_need_data.r1 = vision_recv_data->r1;
+    solvetrajectory_need_data.r2 = vision_recv_data->r2;
+    solvetrajectory_need_data.dz = vision_recv_data->dz;
+    solvetrajectory_need_data.armor_id = vision_recv_data->armor_id;
+    solvetrajectory_need_data.armor_num = vision_recv_data->armor_num;
+    // 陀螺仪数据
+    solvetrajectory_need_data.current_yaw = -gimbal_fetch_data.gimbal_imu_data.Yaw;
+    solvetrajectory_need_data.current_pitch = -gimbal_fetch_data.gimbal_imu_data.Pitch;
+    // 发射数据
+    solvetrajectory_need_data.current_v = 15;   // shoot_fetch_data.bullet_speed;
 }
 
 /**
@@ -197,7 +235,7 @@ static void RemoteControlSet()
         float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input;
+        gimbal_cmd_send.pitch  += 0.0005f * gimbal_pitch_input; // rad
         // 云台pitch限位
         if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
         {
@@ -207,7 +245,7 @@ static void RemoteControlSet()
         {
             gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
         }
-
+        
 
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
         chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 5.0f : 0.0f; // 1竖直方向
@@ -232,8 +270,26 @@ static void RemoteControlSet()
         float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
         float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
-        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input; // rad
+        static float gimbal_yaw;
+        gimbal_yaw -= 0.0025f * gimbal_yaw_input;
+        gimbal_cmd_send.yaw = gimbal_yaw + YAW_ALIGN_ANGLE - 360.0f; // 保证yaw初始时对齐朝前
+        gimbal_cmd_send.pitch  += 0.0005f * gimbal_pitch_input;
+
+
+        // 测试 小yaw
+        static float small_yaw;
+        float gimbal_small_yaw_input = ((float)rc_data[TEMP].rc.rocker_r_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ : 0.0f; // _水平方向
+        small_yaw -= 0.0005f * gimbal_small_yaw_input;
+        if(small_yaw > SMALL_YAW_MAN_ANGLE)
+        {
+            small_yaw = SMALL_YAW_MAN_ANGLE;
+        }
+        else if (small_yaw < SMALL_YAW_MIN_ANGLE)
+        {
+            small_yaw = SMALL_YAW_MIN_ANGLE;
+        }
+        gimbal_cmd_send.small_yaw = small_yaw - CalcOffsetAngle(); // 确保输入为0时小yaw大yaw对齐朝前
+
         // 云台pitch限位
         if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
         {
@@ -255,16 +311,18 @@ static void RemoteControlSet()
 
         // 死区判断
         float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
-        // float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
-        
-        // 测试将Picth遥控给小YAW
-        float gimbal_small_yaw_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
-        
-        // 系数需要调整
+        float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
+
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        // gimbal_cmd_send.pitch  += 0.00025f * gimbal_pitch_input;
-        gimbal_cmd_send.small_yaw  += 0.00025f * gimbal_small_yaw_input;
+        gimbal_cmd_send.small_yaw = gimbal_fetch_data.gimbal_imu_data.Yaw + solvetrajectory_fetch_data.yaw; // 小YAW跟随视觉
+        if(vision_recv_data->tracking == NO_TARGET)
+        {
+            gimbal_cmd_send.small_yaw = gimbal_fetch_data.gimbal_imu_data.Yaw; // 无目标时小YAW不动
+        }
+
+        gimbal_cmd_send.pitch  = gimbal_fetch_data.gimbal_imu_data.Pitch + solvetrajectory_fetch_data.pitch; // pitch跟随视觉
+        
         // 云台pitch限位
         if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
         {
@@ -459,6 +517,7 @@ void RobotCMDTask()
 #endif // GIMBAL_BOARD
     SubGetMessage(shoot_feed_sub, &shoot_fetch_data);
     SubGetMessage(gimbal_feed_sub, &gimbal_fetch_data);
+    SubGetMessage(solvetrajectory_feed_sub,(void *)&solvetrajectory_fetch_data);
 
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
@@ -470,8 +529,15 @@ void RobotCMDTask()
 
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
 
-    // 设置视觉发送数据,还需增加加速度和角速度数据
-    // VisionSetFlag(chassis_fetch_data.enemy_color,,chassis_fetch_data.bullet_speed)
+    setVisionSendData_rpy(-gimbal_fetch_data.gimbal_imu_data.Roll,
+                          -gimbal_fetch_data.gimbal_imu_data.Pitch,
+                          -gimbal_fetch_data.gimbal_imu_data.Yaw);
+    setVisionSendData_aim(solvetrajectory_fetch_data.aim_x,
+                          solvetrajectory_fetch_data.aim_y,
+                          solvetrajectory_fetch_data.aim_z);
+
+    // 设置弹道解算数据
+    GetSolvetrajectory_need_data();
 
     // 推送消息,双板通信,视觉通信等
     // 其他应用所需的控制数据在remotecontrolsetmode和mousekeysetmode中完成设置
@@ -483,4 +549,5 @@ void RobotCMDTask()
 #endif // GIMBAL_BOARD
     PubPushMessage(shoot_cmd_pub, (void *)&shoot_cmd_send);
     PubPushMessage(gimbal_cmd_pub, (void *)&gimbal_cmd_send);
+    PubPushMessage(solvetrajectory_need_pub, (void *)&solvetrajectory_need_data);
 }

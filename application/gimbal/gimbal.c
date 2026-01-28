@@ -7,6 +7,7 @@
 #include "bmi088.h"
 #include "dmmotor.h"
 
+
 static attitude_t *gimba_IMU_data; // 云台IMU数据
 static DJIMotorInstance *yaw_motor;
 DJIMotorInstance *small_yaw_motor;  // 在INTtask中访问，计算大Yaw反馈
@@ -46,12 +47,10 @@ void GimbalInit()
                 .IntegralLimit = 3000,
                 .MaxOut = 20000,
             },
-            .other_angle_feedback_ptr = &gimba_IMU_data->Big_Yaw_Feed,
-            .other_speed_feedback_ptr = &gimba_IMU_data->Gyro[2],
         },
         .controller_setting_init_config = {
-            .angle_feedback_source = OTHER_FEED,
-            .speed_feedback_source = OTHER_FEED,
+            .angle_feedback_source = MOTOR_FEED,
+            .speed_feedback_source = MOTOR_FEED,
             .outer_loop_type = ANGLE_LOOP,
             .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
@@ -99,15 +98,25 @@ void GimbalInit()
     // PITCH
      Motor_Init_Config_s pitch_config = {
         .can_init_config = {
-            .can_handle = &hcan1, // 1--->2 O.o
+            .can_handle = &hcan2, // 1--->2 O.o
             .tx_id = 0x04,
             .rx_id = 0x14,
+        },
+        .controller_setting_init_config = {
+            .angle_feedback_source = OTHER_FEED, // 使用IMU作为角度反馈
+            .speed_feedback_source = OTHER_FEED,
+            .outer_loop_type = ANGLE_LOOP,
+            .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
+            // .outer_loop_type = SPEED_LOOP,
+            // .close_loop_type = SPEED_LOOP,
+            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
+            .feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE,
         },
         .controller_param_init_config = {
             .DM_MIT_Kp = 0,
             .DM_MIT_Kd = 0.1,
             .angle_PID = {
-                .Kp = 50,//0.31
+                .Kp = 35,//0.31
                 .Ki = 50,//1
                 .Kd = 0,//0.001
                 .MaxOut = 1000,
@@ -119,32 +128,14 @@ void GimbalInit()
             .speed_PID = {
                 .Kp = 0.13,//0.12
                 .Ki = 0,//0
-                .Kd = 0.001,//0.01
-                .MaxOut = 53,//53
+                .Kd = 0.003,//0.01
+                .MaxOut = 100,//53
             },
-            //.other_angle_feedback_ptr = &gimbal_IMU_data->YawTotalAngle,
-            //.other_speed_feedback_ptr = &gimbal_IMU_data->Gyro[2],
-            //.other_angle_feedback_ptr = &gimbal_IMU_data_ch->YawTotalAngle,
-            //.other_speed_feedback_ptr = &gimbal_IMU_data_ch->gyr[2],
-        },
-        .controller_setting_init_config = {
-            .angle_feedback_source = MOTOR_FEED,
-            .speed_feedback_source = MOTOR_FEED,
-            .outer_loop_type = ANGLE_LOOP,
-            .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
-            // .outer_loop_type = SPEED_LOOP,
-            // .close_loop_type = SPEED_LOOP,
-            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
-            .feedback_reverse_flag = FEEDBACK_DIRECTION_NORMAL,
+            .other_angle_feedback_ptr = &gimba_IMU_data->Pitch,
+            .other_speed_feedback_ptr = &gimba_IMU_data->Gyro[1],
         },
         .motor_type = DMMotor};
 
-    // 电机对total_angle闭环,上电时为零,会保持静止,收到遥控器数据再动
-    // gimbal_6020_conf.can_init_config.tx_id = 1;
-    // motor_yaw = DJIMotorInit(&gimbal_6020_conf);
-
-    // gimbal_3508_conf.can_init_config.tx_id = 2;
-    // motor_pitch = DJIMotorInit(&gimbal_3508_conf);
 
     pitch_motor = MITMotorInit(&pitch_config);
     // 电机对total_angle闭环,上电时为零,会保持静止,收到遥控器数据再动
@@ -164,7 +155,7 @@ void GimbalTask()
     // 后续增加未收到数据的处理
     SubGetMessage(gimbal_sub, &gimbal_cmd_recv);
 
-    DMMotorSetSpeedFeedForward(pitch_motor, gimbal_cmd_recv.pitch_omega_feedforword);
+    
     // @todo:现在已不再需要电机反馈,实际上可以始终使用IMU的姿态数据来作为云台的反馈,yaw电机的offset只是用来跟随底盘
     // 根据控制模式进行电机反馈切换和过渡,视觉模式在robot_cmd模块就已经设置好,gimbal只看yaw_ref和pitch_ref
     switch (gimbal_cmd_recv.gimbal_mode)
@@ -177,14 +168,17 @@ void GimbalTask()
         break;
     // 使用陀螺仪的反馈,底盘根据yaw电机的offset跟随云台或视觉模式采用
     case GIMBAL_GYRO_MODE:
+        // 大yaw采用编码器反馈
         DJIMotorEnable(yaw_motor);
+        DJIMotorChangeFeed(yaw_motor, ANGLE_LOOP, MOTOR_FEED);
+        DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, MOTOR_FEED);
+        DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // 在cmd中处理多圈与单圈
+        // 小yaw采用IMU反馈
         DJIMotorEnable(small_yaw_motor);
-        DJIMotorChangeFeed(yaw_motor, ANGLE_LOOP, OTHER_FEED);
-        DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(small_yaw_motor, ANGLE_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(small_yaw_motor, SPEED_LOOP, OTHER_FEED);
-        DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // yaw和pitch会在robot_cmd中处理好多圈和单圈
-
+        DJIMotorSetRef(small_yaw_motor, gimbal_cmd_recv.small_yaw);
+        // pitch采用IMU反馈
         DMMotorEnable(pitch_motor);
         DMMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch);
        

@@ -226,16 +226,16 @@ void VisionSend()
     static Vision_Send_Packet_t pkt;
 
     pkt.header = 0x5A;
-    pkt.aim_x = 100.0f; // 默认发一个远点
-    pkt.aim_y = 100.0f;
-    pkt.aim_z = 100.0f;
+    pkt.aim_x = send_data.aim_x; // 默认发一个远点
+    pkt.aim_y = send_data.aim_y;
+    pkt.aim_z = send_data.aim_z;
 
-    pkt.roll  = 123.0f;
-    pkt.pitch = 123.0f;
-    pkt.yaw   = 123.0f;
+    pkt.roll  = send_data.roll;
+    pkt.pitch = send_data.pitch;
+    pkt.yaw   = send_data.yaw;
 
-    pkt.detect_color = 0;  // 0:blue
-    pkt.reset_tracking = 0;
+    pkt.detect_color = ENEMY_COLOR;  // 0:blue
+    pkt.reset_tracking = send_data.reset_tracking;
 
     CRC16_Append((uint8_t *)&pkt, sizeof(Vision_Send_Packet_t));
 
