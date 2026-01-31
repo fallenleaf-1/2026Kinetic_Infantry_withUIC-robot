@@ -144,7 +144,7 @@ void RobotCMDInit()
 #endif // GIMBAL_BOARD
 
     gimbal_cmd_send.pitch = 0.0f;
-    gimbal_cmd_send.yaw = YAW_ALIGN_ANGLE;
+    gimbal_cmd_send.small_yaw = YAW_ALIGN_ANGLE -360.0f;
 
     robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
     AlarmInit();
@@ -245,6 +245,19 @@ static void RemoteControlSet()
         {
             gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
         }
+
+        static float small_yaw_rc;
+        float gimbal_small_yaw_input = ((float)rc_data[TEMP].rc.rocker_r_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ : 0.0f; // _水平方向
+        small_yaw_rc -= 0.0005f * gimbal_small_yaw_input;
+        if(small_yaw_rc > SMALL_YAW_MAN_ANGLE)
+        {
+            small_yaw_rc = SMALL_YAW_MAN_ANGLE;
+        }
+        else if (small_yaw_rc < SMALL_YAW_MIN_ANGLE)
+        {
+            small_yaw_rc = SMALL_YAW_MIN_ANGLE;
+        }
+        gimbal_cmd_send.small_yaw = small_yaw_rc + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
         
 
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
@@ -272,23 +285,23 @@ static void RemoteControlSet()
         // 系数需要调整
         static float gimbal_yaw;
         gimbal_yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.yaw = gimbal_yaw + YAW_ALIGN_ANGLE - 360.0f; // 保证yaw初始时对齐朝前
+        gimbal_cmd_send.yaw = gimbal_yaw;
         gimbal_cmd_send.pitch  += 0.0005f * gimbal_pitch_input;
 
 
         // 测试 小yaw
-        static float small_yaw;
+        static float small_yaw_rc;
         float gimbal_small_yaw_input = ((float)rc_data[TEMP].rc.rocker_r_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ : 0.0f; // _水平方向
-        small_yaw -= 0.0005f * gimbal_small_yaw_input;
-        if(small_yaw > SMALL_YAW_MAN_ANGLE)
+        small_yaw_rc -= 0.0005f * gimbal_small_yaw_input;
+        if(small_yaw_rc > SMALL_YAW_MAN_ANGLE)
         {
-            small_yaw = SMALL_YAW_MAN_ANGLE;
+            small_yaw_rc = SMALL_YAW_MAN_ANGLE;
         }
-        else if (small_yaw < SMALL_YAW_MIN_ANGLE)
+        else if (small_yaw_rc < SMALL_YAW_MIN_ANGLE)
         {
-            small_yaw = SMALL_YAW_MIN_ANGLE;
+            small_yaw_rc = SMALL_YAW_MIN_ANGLE;
         }
-        gimbal_cmd_send.small_yaw = small_yaw - CalcOffsetAngle(); // 确保输入为0时小yaw大yaw对齐朝前
+        gimbal_cmd_send.small_yaw = small_yaw_rc + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
 
         // 云台pitch限位
         if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
@@ -315,10 +328,10 @@ static void RemoteControlSet()
 
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.small_yaw = gimbal_fetch_data.gimbal_imu_data.Yaw + solvetrajectory_fetch_data.yaw; // 小YAW跟随视觉
+        gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f + solvetrajectory_fetch_data.yaw; // 小YAW跟随视觉
         if(vision_recv_data->tracking == NO_TARGET)
         {
-            gimbal_cmd_send.small_yaw = gimbal_fetch_data.gimbal_imu_data.Yaw; // 无目标时小YAW不动
+            gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f; // 无目标时小YAW朝前不动
         }
 
         gimbal_cmd_send.pitch  = gimbal_fetch_data.gimbal_imu_data.Pitch + solvetrajectory_fetch_data.pitch; // pitch跟随视觉

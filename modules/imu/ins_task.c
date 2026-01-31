@@ -57,32 +57,6 @@ static void IMU_Temperature_Ctrl(void)
     IMUPWMSet(float_constrain(float_rounding(TempCtrl.Output), 0, UINT32_MAX));
 }
 
-static float CalcOffsetAngle()
-{
-    // 别名angle提高可读性,不然太长了不好看,虽然基本不会动这个函数
-    static float angle;
-    static float offset_angle;
-    angle = small_yaw_motor->measure.angle_single_round; // 获取的当前yaw电机单圈角度
-#if SMALL_YAW_ECD_GREATER_THAN_4096                               // 如果大于180度
-    if (angle > SMALL_YAW_ALIGN_ANGLE && angle <= 180.0f + SMALL_YAW_ALIGN_ANGLE)
-        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
-    else if (angle > 180.0f + SMALL_YAW_ALIGN_ANGLE)
-        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE - 360.0f;
-    else
-        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
-    
-#else // 小于180度
-    if (angle > SMALL_YAW_ALIGN_ANGLE)
-        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
-    else if (angle <= SMALL_YAW_ALIGN_ANGLE && angle >= SMALL_YAW_ALIGN_ANGLE - 180.0f)
-        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
-    else
-        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE + 360.0f;
-
-#endif
-    return offset_angle;
-}
-
 // 使用加速度计的数据初始化Roll和Pitch,而Yaw置0,这样可以避免在初始时候的姿态估计误差
 static void InitQuaternion(float *init_q4)
 {
@@ -149,6 +123,32 @@ attitude_t *INS_Init(void)
     return &(INS.attitude); // 返回最终姿态数据的指针
 }
 
+static float CalcSmallYawOffsetAngle()
+{
+    // 别名angle提高可读性,不然太长了不好看,虽然基本不会动这个函数
+    static float angle;
+    static float offset_angle;
+    angle = small_yaw_motor->measure.angle_single_round; // 获取的当前小yaw电机单圈角度
+#if SMALL_YAW_ECD_GREATER_THAN_4096                               // 如果大于180度
+    if (angle > SMALL_YAW_ALIGN_ANGLE && angle <= 180.0f + SMALL_YAW_ALIGN_ANGLE)
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
+    else if (angle > 180.0f + SMALL_YAW_ALIGN_ANGLE)
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE - 360.0f;
+    else
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
+    
+#else // 小于180度
+    if (angle > SMALL_YAW_ALIGN_ANGLE)
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
+    else if (angle <= SMALL_YAW_ALIGN_ANGLE && angle >= SMALL_YAW_ALIGN_ANGLE - 180.0f)
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE;
+    else
+        offset_angle = angle - SMALL_YAW_ALIGN_ANGLE + 360.0f;
+
+#endif
+    return offset_angle;
+}
+
 /* 注意以1kHz的频率运行此任务 */
 void INS_Task(void)
 {
@@ -208,7 +208,8 @@ void INS_Task(void)
         INS.attitude.Pitch = INS.Pitch;
         INS.attitude.Yaw = INS.Yaw;
         INS.attitude.YawTotalAngle = INS.YawTotalAngle;
-        INS.attitude.Big_Yaw_Feed = INS.Yaw - CalcOffsetAngle();  //IMU YAW - 小yaw偏角
+        INS.attitude.BigYaw_Feed = INS.YawTotalAngle - CalcSmallYawOffsetAngle(); // 计算大yaw反馈值
+        
 
     }
 

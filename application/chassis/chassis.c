@@ -93,21 +93,26 @@ void ChassisInit()
     };
     //  @todo: 当前还没有设置电机的正反转,仍然需要手动添加reference的正负号,需要电机module的支持,待修改.
     // 使用功率控制的电机需要使用PowerControlInit()函数初始化,因为电机的控制方式不同
-    chassis_M3508_motor_config.can_init_config.tx_id = 1;
+    
+    // CAN1
+    chassis_M3508_motor_config.can_init_config.can_handle = &hcan1;
+    chassis_M3508_motor_config.can_init_config.tx_id = 6;   //1号
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_lf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    chassis_M3508_motor_config.can_init_config.tx_id = 2;
+    chassis_M3508_motor_config.can_init_config.tx_id = 7;   //3号
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_rb = DJIMotorInit(&chassis_M3508_motor_config);
+
+    // CAN2
+    chassis_M3508_motor_config.can_init_config.can_handle = &hcan2;
+    chassis_M3508_motor_config.can_init_config.tx_id = 2;   //2号
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_rf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    chassis_M3508_motor_config.can_init_config.tx_id = 4;
+    chassis_M3508_motor_config.can_init_config.tx_id = 4;   //4号
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
-
-    chassis_M3508_motor_config.can_init_config.tx_id = 3;
-    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_rb = DJIMotorInit(&chassis_M3508_motor_config);
 
 
     // GM6020电机的初始化(舵机电机)
@@ -140,14 +145,17 @@ void ChassisInit()
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL, 
         },
         .motor_type = GM6020};
+    
+    // CAN1
+    chassis_GM6020_motor_config.can_init_config.can_handle = &hcan1;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 1;  // 右后 对应3号轮向电机
+    servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
 
     chassis_GM6020_motor_config.can_init_config.tx_id = 5;  // 左前 对应1号轮向电机
     servo_lf = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 6;  // 右前 对应2号轮向电机
-    servo_rf = DJIMotorInit(&chassis_GM6020_motor_config);
+    // CAN2
     chassis_GM6020_motor_config.can_init_config.can_handle = &hcan2;
-    chassis_GM6020_motor_config.can_init_config.tx_id = 1;  // 右后 对应3号轮向电机
-    servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
+    
     chassis_GM6020_motor_config.can_init_config.tx_id = 7;  // 左后 对应4号轮向电机
     servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
 
@@ -213,7 +221,7 @@ void ChassisInit()
 #define RB_CENTER ((HALF_TRACK_WIDTH - CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
 
 //将电机转子转向内侧时 修正方向
-int8_t steering_dirt[4] = {1, -1, 1, -1};
+int8_t steering_dirt[4] = {1, -1, -1, 1};
 // 改为接收指针，写回调用者的变量
 void chassis_vector_to_M3508_wheel_speed(float vx_set, float vy_set, float wz_set,
                                          float *vt_lf, float *vt_rf, float *vt_lb, float *vt_rb)
@@ -283,7 +291,7 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
     // 使用多圈全角（total_angle）作为基准生成无界目标角度，避免限制在0~360
     DJIMotorInstance *servos[4] = {servo_lf, servo_rf, servo_lb, servo_rb};
     float *targets[4] = {angle_lf, angle_rf, angle_lb, angle_rb};
-    int8_t base_dir[4] = {1, -1, 1, -1}; // 对应每个舵轮的默认驱动方向
+    int8_t base_dir[4] = {1, -1, -1, 1}; // 对应每个舵轮的默认驱动方向
 
     for (int i = 0; i < 4; i++)
     {
@@ -303,12 +311,6 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
 
         // 再基于多圈差值判断是否需要翻转驱动方向（优劣弧）
         float angle_diff = Normalize180(*targets[i] - cur_total);
-
-        // if (chassis_cmd_recv.chassis_mode == CHASSIS_FOLLOW_GIMBAL_YAW)
-        // {
-        //     steering_dirt[i] = base_dir[i];
-        //     continue;   //CHASSIS_FOLLOW_GIMBAL_YAW模式直接跳过翻转判断
-        // }
 
         if (angle_diff > 90.0f)
         {
@@ -450,11 +452,11 @@ void ChassisTask()
     static float sin_theta, cos_theta;
     float rotate_angle = chassis_cmd_recv.offset_angle;
 
-    // 在CHASSIS_FOLLOW_GIMBAL_YAW模式下,vx/vy不要再用 offset_angle 旋转
-    if (chassis_cmd_recv.chassis_mode == CHASSIS_FOLLOW_GIMBAL_YAW)
-    {
-        rotate_angle = 0.0f;
-    }
+    // // 在CHASSIS_FOLLOW_GIMBAL_YAW模式下,vx/vy不要再用 offset_angle 旋转
+    // if (chassis_cmd_recv.chassis_mode == CHASSIS_FOLLOW_GIMBAL_YAW)
+    // {
+    //     rotate_angle = 0.0f;
+    // }
 
     cos_theta = arm_cos_f32(rotate_angle * DEGREE_2_RAD);
     sin_theta = arm_sin_f32(rotate_angle * DEGREE_2_RAD);

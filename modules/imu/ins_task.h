@@ -35,7 +35,8 @@ typedef struct
     float Yaw;
     float YawTotalAngle;
 
-    float Big_Yaw_Feed; // 用于大YAW角度反馈
+    float BigYaw_Feed; // 大yaw反馈值  imu_yaw - small_yaw_offset
+    
 } attitude_t; // 最终解算得到的角度,以及yaw转动的总角度(方便多圈控制)
 
 typedef struct
