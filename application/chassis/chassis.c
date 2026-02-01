@@ -96,23 +96,23 @@ void ChassisInit()
     
     // CAN1
     chassis_M3508_motor_config.can_init_config.can_handle = &hcan1;
-    chassis_M3508_motor_config.can_init_config.tx_id = 6;   //1号
+    chassis_M3508_motor_config.can_init_config.tx_id = 3;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_lf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    chassis_M3508_motor_config.can_init_config.tx_id = 7;   //3号
+    chassis_M3508_motor_config.can_init_config.tx_id = 4;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_rb = DJIMotorInit(&chassis_M3508_motor_config);
-
+    motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
+    
     // CAN2
     chassis_M3508_motor_config.can_init_config.can_handle = &hcan2;
-    chassis_M3508_motor_config.can_init_config.tx_id = 2;   //2号
+    chassis_M3508_motor_config.can_init_config.tx_id = 1;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_rf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    chassis_M3508_motor_config.can_init_config.tx_id = 4;   //4号
+    chassis_M3508_motor_config.can_init_config.tx_id = 5;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
+    motor_rb = DJIMotorInit(&chassis_M3508_motor_config);
 
 
     // GM6020电机的初始化(舵机电机)
@@ -145,18 +145,18 @@ void ChassisInit()
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL, 
         },
         .motor_type = GM6020};
-    
+
     // CAN1
     chassis_GM6020_motor_config.can_init_config.can_handle = &hcan1;
-    chassis_GM6020_motor_config.can_init_config.tx_id = 1;  // 右后 对应3号轮向电机
-    servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
-
-    chassis_GM6020_motor_config.can_init_config.tx_id = 5;  // 左前 对应1号轮向电机
+    chassis_GM6020_motor_config.can_init_config.tx_id = 5;
     servo_lf = DJIMotorInit(&chassis_GM6020_motor_config);
+    chassis_GM6020_motor_config.can_init_config.tx_id = 1;
+    servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
     // CAN2
     chassis_GM6020_motor_config.can_init_config.can_handle = &hcan2;
-    
-    chassis_GM6020_motor_config.can_init_config.tx_id = 7;  // 左后 对应4号轮向电机
+    chassis_GM6020_motor_config.can_init_config.tx_id = 6;
+    servo_rf = DJIMotorInit(&chassis_GM6020_motor_config);
+    chassis_GM6020_motor_config.can_init_config.tx_id = 7;
     servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
 
     // 底盘跟随PID初始化
@@ -221,7 +221,7 @@ void ChassisInit()
 #define RB_CENTER ((HALF_TRACK_WIDTH - CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
 
 //将电机转子转向内侧时 修正方向
-int8_t steering_dirt[4] = {1, -1, -1, 1};
+int8_t steering_dirt[4] = {1, -1, 1, -1};
 // 改为接收指针，写回调用者的变量
 void chassis_vector_to_M3508_wheel_speed(float vx_set, float vy_set, float wz_set,
                                          float *vt_lf, float *vt_rf, float *vt_lb, float *vt_rb)
@@ -291,7 +291,7 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
     // 使用多圈全角（total_angle）作为基准生成无界目标角度，避免限制在0~360
     DJIMotorInstance *servos[4] = {servo_lf, servo_rf, servo_lb, servo_rb};
     float *targets[4] = {angle_lf, angle_rf, angle_lb, angle_rb};
-    int8_t base_dir[4] = {1, -1, -1, 1}; // 对应每个舵轮的默认驱动方向
+    int8_t base_dir[4] = {1, -1, 1, -1}; // 对应每个舵轮的默认驱动方向
 
     for (int i = 0; i < 4; i++)
     {
@@ -311,7 +311,6 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
 
         // 再基于多圈差值判断是否需要翻转驱动方向（优劣弧）
         float angle_diff = Normalize180(*targets[i] - cur_total);
-
         if (angle_diff > 90.0f)
         {
             steering_dirt[i] = -base_dir[i];
@@ -343,7 +342,7 @@ static void MecanumCalculate()
 
     // 舵轮底盘运动学正解算
     chassis_vector_to_M3508_wheel_speed(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &vt_lf, &vt_rf, &vt_rb, &vt_lb);
-    chassis_vector_to_GM6020_wheel_angle_ecd(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &angle_lf, &angle_rf, &angle_lb, &angle_rb);
+    chassis_vector_to_GM6020_wheel_angle_ecd(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &angle_lf, &angle_rf, &angle_rb, &angle_lb);
 }
 
 /**
@@ -423,22 +422,6 @@ void ChassisTask()
         break;
     case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,采用PID  参数待调试
         chassis_cmd_recv.wz = PIDCalculate(&Chassis_Follow_PID, chassis_cmd_recv.offset_angle, 0.0f);
-
-        // float angle_error = Normalize180(chassis_cmd_recv.offset_angle);
-        // // P+D控制
-        // static float kp = 5.0f , pd = 0.4f;
-        // float wz = kp * angle_error - pd * gimba_IMU_data->Gyro[2];
-        // // 低通滤波
-        // static float wz_lpf = 0.0f;
-        // wz_lpf = wz_lpf + 0.1f * (wz - wz_lpf);  // 系数越小越稳，越大响应越快 0.1~0.3
-        
-        // float wz_final = wz_lpf;
-        // // 小角度补偿
-        // if(fabs(wz_final) < 6.0f && fabs(angle_error) > 0.5f) // 死区不补偿
-        //     wz_final = (wz_final > 0) ? 6.0f : -6.0f; // 最小补偿值
-        // wz_final = CLAMP(wz_final, -600.0f, 600.0f); // 限幅
-        // chassis_cmd_recv.wz = wz_final;
-
         break;
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
         chassis_cmd_recv.wz = 100;
@@ -457,7 +440,6 @@ void ChassisTask()
     // {
     //     rotate_angle = 0.0f;
     // }
-
     cos_theta = arm_cos_f32(rotate_angle * DEGREE_2_RAD);
     sin_theta = arm_sin_f32(rotate_angle * DEGREE_2_RAD);
 

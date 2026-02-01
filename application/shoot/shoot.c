@@ -52,10 +52,10 @@ void ShootInit()
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
         .motor_type = M3508};
-    friction_config.can_init_config.tx_id = 1,
+    friction_config.can_init_config.tx_id = 2,
     friction_l = DJIMotorInit(&friction_config);
 
-    friction_config.can_init_config.tx_id = 3; // 右摩擦轮,改txid和方向就行
+    friction_config.can_init_config.tx_id = 6; // 右摩擦轮,改txid和方向就行
     friction_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
     friction_r = DJIMotorInit(&friction_config);
 
@@ -63,7 +63,7 @@ void ShootInit()
     Motor_Init_Config_s loader_config = {
         .can_init_config = {
             .can_handle = &hcan1,
-            .tx_id = 5,
+            .tx_id = 7,
         },
         .controller_param_init_config = {
             .angle_PID = {

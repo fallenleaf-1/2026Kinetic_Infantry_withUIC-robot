@@ -56,8 +56,9 @@
 //四个驱动电机朝向前方时 转向电机初始编码值
 #define GM6020_LF_ANGLE 193.99f		//装上去的时候Y轴正向对应的角度
 #define GM6020_RF_ANGLE 344.13f
-#define GM6020_LB_ANGLE 225.35f
-#define GM6020_RB_ANGLE 315.35f
+#define GM6020_RB_ANGLE 133.98f
+#define GM6020_LB_ANGLE 46.53f
+
 
 #define GYRO2GIMBAL_DIR_YAW 1   // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
 #define GYRO2GIMBAL_DIR_PITCH 1 // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反
