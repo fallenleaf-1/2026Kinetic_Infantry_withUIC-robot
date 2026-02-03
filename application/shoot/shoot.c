@@ -68,22 +68,22 @@ void ShootInit()
         .controller_param_init_config = {
             .angle_PID = {
                 // 如果启用位置环来控制发弹,需要较大的I值保证输出力矩的线性度否则出现接近拨出的力矩大幅下降
-                .Kp = 0, // 10
+                .Kp = 10, // 10
                 .Ki = 0,
                 .Kd = 0,
                 .MaxOut = 200,
             },
             .speed_PID = {
-                .Kp = 0, // 10
-                .Ki = 0, // 1
+                .Kp = 10, // 10
+                .Ki = 1, // 1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 5000,
                 .MaxOut = 5000,
             },
             .current_PID = {
-                .Kp = 0, // 0.7
-                .Ki = 0, // 0.1
+                .Kp = 0.7f, // 0.7
+                .Ki = 0.1f, // 0.1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 5000,
@@ -187,8 +187,8 @@ void ShootTask()
             DJIMotorSetRef(friction_r, 0);
             break;
         default: // 当前为了调试设定的默认值4000,因为还没有加入裁判系统无法读取弹速.
-            DJIMotorSetRef(friction_l, 30000);
-            DJIMotorSetRef(friction_r, 30000);
+            DJIMotorSetRef(friction_l, 300);
+            DJIMotorSetRef(friction_r, 300);
             break;
         }
     }

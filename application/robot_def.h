@@ -54,8 +54,8 @@
 #define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
 #define CHASSIS_DEAD_BAND 10   // 底盘速度死区,低于该值的速度指令将被置为0
 //四个驱动电机朝向前方时 转向电机初始编码值
-#define GM6020_LF_ANGLE 193.99f		//装上去的时候Y轴正向对应的角度
-#define GM6020_RF_ANGLE 344.13f
+#define GM6020_LF_ANGLE 192.69f		//装上去的时候Y轴正向对应的角度
+#define GM6020_RF_ANGLE 226.36f
 #define GM6020_RB_ANGLE 133.98f
 #define GM6020_LB_ANGLE 46.53f
 

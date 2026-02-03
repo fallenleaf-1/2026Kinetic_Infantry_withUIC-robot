@@ -246,18 +246,21 @@ static void RemoteControlSet()
             gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
         }
 
-        static float small_yaw_rc;
-        float gimbal_small_yaw_input = ((float)rc_data[TEMP].rc.rocker_r_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ : 0.0f; // _水平方向
-        small_yaw_rc -= 0.0005f * gimbal_small_yaw_input;
-        if(small_yaw_rc > SMALL_YAW_MAN_ANGLE)
+        static float small_yaw_vision_input;
+        small_yaw_vision_input = solvetrajectory_fetch_data.yaw;
+        if(small_yaw_vision_input > SMALL_YAW_MAN_ANGLE)
         {
-            small_yaw_rc = SMALL_YAW_MAN_ANGLE;
+            small_yaw_vision_input = SMALL_YAW_MAN_ANGLE;
         }
-        else if (small_yaw_rc < SMALL_YAW_MIN_ANGLE)
+        else if (small_yaw_vision_input < SMALL_YAW_MIN_ANGLE)
         {
-            small_yaw_rc = SMALL_YAW_MIN_ANGLE;
+            small_yaw_vision_input = SMALL_YAW_MIN_ANGLE;
         }
-        gimbal_cmd_send.small_yaw = small_yaw_rc + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
+        gimbal_cmd_send.small_yaw = small_yaw_vision_input + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
+        if(vision_recv_data->tracking == false)
+        {
+            gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f; // 无目标时小yaw对齐
+        }
         
 
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
@@ -283,25 +286,24 @@ static void RemoteControlSet()
         float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
         float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
-        static float gimbal_yaw;
-        gimbal_yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.yaw = gimbal_yaw;
-        gimbal_cmd_send.pitch  += 0.0005f * gimbal_pitch_input;
-
+        gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f;
+        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
+        gimbal_cmd_send.pitch += 0.0005f * gimbal_pitch_input;
+        
 
         // 测试 小yaw
-        static float small_yaw_rc;
-        float gimbal_small_yaw_input = ((float)rc_data[TEMP].rc.rocker_r_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ : 0.0f; // _水平方向
-        small_yaw_rc -= 0.0005f * gimbal_small_yaw_input;
-        if(small_yaw_rc > SMALL_YAW_MAN_ANGLE)
-        {
-            small_yaw_rc = SMALL_YAW_MAN_ANGLE;
-        }
-        else if (small_yaw_rc < SMALL_YAW_MIN_ANGLE)
-        {
-            small_yaw_rc = SMALL_YAW_MIN_ANGLE;
-        }
-        gimbal_cmd_send.small_yaw = small_yaw_rc + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
+        // static float small_yaw_rc;
+        // float gimbal_small_yaw_input = ((float)rc_data[TEMP].rc.rocker_r_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ : 0.0f; // _水平方向
+        // small_yaw_rc -= 0.0005f * gimbal_small_yaw_input;
+        // if(small_yaw_rc > SMALL_YAW_MAN_ANGLE)
+        // {
+        //     small_yaw_rc = SMALL_YAW_MAN_ANGLE;
+        // }
+        // else if (small_yaw_rc < SMALL_YAW_MIN_ANGLE)
+        // {
+        //     small_yaw_rc = SMALL_YAW_MIN_ANGLE;
+        // }
+        // gimbal_cmd_send.small_yaw = small_yaw_rc + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
 
         // 云台pitch限位
         if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
@@ -328,13 +330,23 @@ static void RemoteControlSet()
 
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f + solvetrajectory_fetch_data.yaw; // 小YAW跟随视觉
-        if(vision_recv_data->tracking == NO_TARGET)
-        {
-            gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f; // 无目标时小YAW朝前不动
-        }
+        gimbal_cmd_send.pitch += 0.0005f * gimbal_pitch_input;
 
-        gimbal_cmd_send.pitch  = gimbal_fetch_data.gimbal_imu_data.Pitch + solvetrajectory_fetch_data.pitch; // pitch跟随视觉
+        static float small_yaw_vision_input;
+        small_yaw_vision_input = solvetrajectory_fetch_data.yaw;
+        if(small_yaw_vision_input > SMALL_YAW_MAN_ANGLE)
+        {
+            small_yaw_vision_input = SMALL_YAW_MAN_ANGLE;
+        }
+        else if (small_yaw_vision_input < SMALL_YAW_MIN_ANGLE)
+        {
+            small_yaw_vision_input = SMALL_YAW_MIN_ANGLE;
+        }
+        gimbal_cmd_send.small_yaw = small_yaw_vision_input + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
+        if(vision_recv_data->tracking == false)
+        {
+            gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE -360.0f; // 无目标时小yaw对齐
+        }
         
         // 云台pitch限位
         if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
@@ -388,7 +400,8 @@ static void RemoteControlSet()
     // chassis_cmd_send.vx = 50.0f * (float)rc_data[TEMP].rc.rocker_r_; // _水平方向
     // chassis_cmd_send.vy = 100.0f * (float)rc_data[TEMP].rc.rocker_r1; // 1竖直方向
 
-    // // 摩擦轮控制,拨轮向上打为负,向下为正
+
+    // 摩擦轮控制,拨轮向上打为负,向下为正
     // if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 向上超过100,打开摩擦轮
     //     shoot_cmd_send.friction_mode = FRICTION_ON;
     // else
