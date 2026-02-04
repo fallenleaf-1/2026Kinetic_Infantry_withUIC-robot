@@ -177,7 +177,6 @@ void GimbalTask()
         if(gimbal_SmallYaw_Init_Flag == false)  // 先初始化小yaw，再初始化大yaw
         {
             DJIMotorEnable(small_yaw_motor);
-            DJIMotorEnable(yaw_motor);
             if(small_yaw_motor->measure.ecd < SMALL_YAW_FORWORD_ALIGN_ECD + 5 || small_yaw_motor->measure.ecd > SMALL_YAW_FORWORD_ALIGN_ECD - 5)
             {
                 gimbal_SmallYaw_Init_Flag = true; // 标志位置位,只初始化一次 
@@ -186,6 +185,7 @@ void GimbalTask()
         if(gimbal_SmallYaw_Init_Flag == true)
         {
         // 大yaw采IMU反馈
+            DJIMotorEnable(yaw_motor);
             DJIMotorChangeFeed(yaw_motor, ANGLE_LOOP, OTHER_FEED);
             DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, OTHER_FEED);
             DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // 在cmd中处理多圈与单圈

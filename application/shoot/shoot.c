@@ -27,16 +27,16 @@ void ShootInit()
         },
         .controller_param_init_config = {
             .speed_PID = {
-                .Kp = 0, // 20
-                .Ki = 0, // 1
+                .Kp = 20, // 20
+                .Ki = 1, // 1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 10000,
                 .MaxOut = 15000,
             },
             .current_PID = {
-                .Kp = 0, // 0.7
-                .Ki = 0, // 0.1
+                .Kp = 0.7f, // 0.7
+                .Ki = 0.1f, // 0.1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 10000,
@@ -69,13 +69,13 @@ void ShootInit()
             .angle_PID = {
                 // 如果启用位置环来控制发弹,需要较大的I值保证输出力矩的线性度否则出现接近拨出的力矩大幅下降
                 .Kp = 10, // 10
-                .Ki = 0,
+                .Ki = 5,
                 .Kd = 0,
                 .MaxOut = 200,
             },
             .speed_PID = {
                 .Kp = 10, // 10
-                .Ki = 1, // 1
+                .Ki = 10, // 1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 5000,
@@ -154,8 +154,21 @@ void ShootTask()
     // 连发模式,对速度闭环,射频后续修改为可变,目前固定为1Hz
     case LOAD_BURSTFIRE:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
-        DJIMotorSetRef(loader, shoot_cmd_recv.shoot_rate * 360 * REDUCTION_RATIO_LOADER / 8);
         // x颗/秒换算成速度: 已知一圈的载弹量,由此计算出1s需要转的角度,注意换算角速度(DJIMotor的速度单位是angle per second)
+        if(shoot_cmd_recv.burstfire_rate == BURSTFIRE_RATE_15)
+            DJIMotorSetRef(loader, 15 * ONE_BULLET_DELTA_ANGLE * REDUCTION_RATIO_LOADER);
+        else if(shoot_cmd_recv.burstfire_rate == BURSTFIRE_RATE_20)
+            DJIMotorSetRef(loader, 20 * ONE_BULLET_DELTA_ANGLE * REDUCTION_RATIO_LOADER);
+        else if(shoot_cmd_recv.burstfire_rate == BURSTFIRE_RATE_25)
+            DJIMotorSetRef(loader, 25 * ONE_BULLET_DELTA_ANGLE * REDUCTION_RATIO_LOADER);
+        else if(shoot_cmd_recv.burstfire_rate == BURSTFIRE_RATE_30)
+            DJIMotorSetRef(loader, 30 * ONE_BULLET_DELTA_ANGLE * REDUCTION_RATIO_LOADER);
+        else if(shoot_cmd_recv.burstfire_rate == BURSTFIRE_RATE_35)
+            DJIMotorSetRef(loader, 35 * ONE_BULLET_DELTA_ANGLE * REDUCTION_RATIO_LOADER);
+        else if(shoot_cmd_recv.burstfire_rate == BURSTFIRE_RATE_40)
+            DJIMotorSetRef(loader, 40 * ONE_BULLET_DELTA_ANGLE * REDUCTION_RATIO_LOADER);
+        // 最终档位还未确定,后续补充
+    
         break;
     // 拨盘反转,对速度闭环,后续增加卡弹检测(通过裁判系统剩余热量反馈和电机电流)
     // 也有可能需要从switch-case中独立出来
@@ -174,25 +187,26 @@ void ShootTask()
         // 根据收到的弹速设置设定摩擦轮电机参考值,需实测后填入
         switch (shoot_cmd_recv.bullet_speed)
         {
-        case SMALL_AMU_15:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
-            break;
-        case SMALL_AMU_18:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
-            break;
-        case SMALL_AMU_30:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
-            break;
-        default: // 当前为了调试设定的默认值4000,因为还没有加入裁判系统无法读取弹速.
-            DJIMotorSetRef(friction_l, 300);
-            DJIMotorSetRef(friction_r, 300);
-            break;
+            case SMALL_AMU_15:
+                // DJIMotorSetRef(friction_l, 48000);
+                // DJIMotorSetRef(friction_r, 48000);
+                DJIMotorSetRef(friction_l, 4000);
+                DJIMotorSetRef(friction_r, 4000);
+                break;
+            case SMALL_AMU_18:
+                // DJIMotorSetRef(friction_l, 24000);
+                // DJIMotorSetRef(friction_r, 24000);
+                break;
+            case SMALL_AMU_30:
+                // DJIMotorSetRef(friction_l, 2000);
+                // DJIMotorSetRef(friction_r, 2000);
+                break;
+            default: // 当前为了调试设定的默认值4000,因为还没有加入裁判系统无法读取弹速.
+                DJIMotorSetRef(friction_l, 50);
+                DJIMotorSetRef(friction_r, 50);
+                break;
         }
-    }
-    else // 关闭摩擦轮
+    }else // 关闭摩擦轮
     {
         DJIMotorSetRef(friction_l, 0);
         DJIMotorSetRef(friction_r, 0);

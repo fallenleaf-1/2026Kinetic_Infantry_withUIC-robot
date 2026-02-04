@@ -18,14 +18,6 @@ typedef enum
 
 typedef enum
 {
-	NO_TARGET = 0,           // 无目标
-	TARGET_CONVERGING = 1,   // 目标收敛中
-	READY_TO_FIRE = 2        // 准备射击
-} Target_State_e;
-
-
-typedef enum
-{
 	COLOR_BLUE = 0,
 	COLOR_RED = 1,
 } Enemy_Color_e;	// 敌方颜色枚举
@@ -40,11 +32,11 @@ typedef enum
 typedef enum
 {
 	BULLET_SPEED_NONE = 0,
-	BIG_AMU_10 = 10,
-	SMALL_AMU_15 = 15,
-	BIG_AMU_16 = 16,
-	SMALL_AMU_18 = 18,
-	SMALL_AMU_30 = 30,
+	BIG_AMU_10,
+	SMALL_AMU_15,
+	BIG_AMU_16,
+	SMALL_AMU_18,
+	SMALL_AMU_30,
 } Bullet_Speed_e; // 子弹速度枚举
 
 typedef enum

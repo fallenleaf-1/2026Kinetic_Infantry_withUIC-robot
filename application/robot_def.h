@@ -140,6 +140,16 @@ typedef enum
     LOAD_BURSTFIRE, // 连发
 } loader_mode_e;
 
+typedef enum
+{
+    BURSTFIRE_RATE_15 = 0,   //15
+    BURSTFIRE_RATE_20,
+    BURSTFIRE_RATE_25,
+    BURSTFIRE_RATE_30,
+    BURSTFIRE_RATE_35,
+    BURSTFIRE_RATE_40,
+} burstfire_rate_e; // 连发速率档位枚举  拨弹盘电机速度档位
+
 // 功率限制,从裁判系统获取,是否有必要保留?
 typedef struct
 { // 功率控制
@@ -189,6 +199,7 @@ typedef struct
     Bullet_Speed_e bullet_speed; // 弹速枚举
     uint8_t rest_heat;
     float shoot_rate; // 连续发射的射频,unit per s,发/秒
+    burstfire_rate_e burstfire_rate; // 连续发射的射频枚举
 } Shoot_Ctrl_Cmd_s;
 
 /* ----------------gimbal/shoot/chassis发布的反馈数据----------------*/

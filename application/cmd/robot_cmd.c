@@ -51,6 +51,7 @@ static Subscriber_t *solvetrajectory_feed_sub;  // 弹道解算反馈信息订�
 static SolveTrajectory_Recv_s solvetrajectory_need_data; // 弹道解算所需信息
 static SolveTrajectory_Send_s solvetrajectory_fetch_data; // 弹道解算获取的反馈信息
 
+
 static Robot_Status_e robot_state; // 机器人整体工作状态
 
 BMI088Instance *bmi088_test; // 云台IMU
@@ -232,37 +233,45 @@ static void RemoteControlSet()
 
         // 死区判断
         float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
-        float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
+        // float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
         gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch  += 0.0005f * gimbal_pitch_input; // rad
-        // 云台pitch限位
-        if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
-        {
-            gimbal_cmd_send.pitch = PITCH_MAX_ANGLE;
-        }
-        else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
-        {
-            gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
-        }
+        // gimbal_cmd_send.pitch  += 0.0005f * gimbal_pitch_input;
 
+        // 视觉控制
+        static float pitch_vision_input;
         static float small_yaw_vision_input;
-        small_yaw_vision_input = solvetrajectory_fetch_data.yaw;
-        if(small_yaw_vision_input > SMALL_YAW_MAN_ANGLE)
+        if(vision_recv_data->tracking == true)
         {
-            small_yaw_vision_input = SMALL_YAW_MAN_ANGLE;
-        }
-        else if (small_yaw_vision_input < SMALL_YAW_MIN_ANGLE)
-        {
-            small_yaw_vision_input = SMALL_YAW_MIN_ANGLE;
-        }
-        gimbal_cmd_send.small_yaw = small_yaw_vision_input + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
-        if(vision_recv_data->tracking == false)
-        {
-            gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f; // 无目标时小yaw对齐
-        }
-        
+            // 符号等待确定
+            pitch_vision_input += solvetrajectory_fetch_data.pitch;
+            small_yaw_vision_input += solvetrajectory_fetch_data.yaw;
+            // 对弹道解算控制量进行限位
+            if(small_yaw_vision_input > SMALL_YAW_MAN_ANGLE)
+            {
+                small_yaw_vision_input = SMALL_YAW_MAN_ANGLE;
+            }
+            else if (small_yaw_vision_input < SMALL_YAW_MIN_ANGLE)
+            {
+                small_yaw_vision_input = SMALL_YAW_MIN_ANGLE;
+            }
 
+            if(pitch_vision_input > PITCH_MAX_ANGLE)
+            {
+                pitch_vision_input = PITCH_MAX_ANGLE;
+            }
+            else if (pitch_vision_input < PITCH_MIN_ANGLE)
+            {
+                pitch_vision_input = PITCH_MIN_ANGLE;
+            }
+        }else if (vision_recv_data->tracking == false)
+        {
+            pitch_vision_input = 0.0f;
+            small_yaw_vision_input = 0.0f;
+        }
+        gimbal_cmd_send.pitch = pitch_vision_input;
+        gimbal_cmd_send.small_yaw = small_yaw_vision_input + SMALL_YAW_ALIGN_ANGLE - 360.0f;// 确保输入为0时小yaw大yaw对齐朝前
+        
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
         chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 5.0f : 0.0f; // 1竖直方向
 
@@ -321,97 +330,49 @@ static void RemoteControlSet()
     }
     else if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
     {
-        chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW; // 底盘跟随云台
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+        // chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW; // 底盘跟随云台
+        // gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
 
-        // 死区判断
-        float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
-        float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
-
-        // 系数需要调整
-        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        gimbal_cmd_send.pitch += 0.0005f * gimbal_pitch_input;
-
-        static float small_yaw_vision_input;
-        small_yaw_vision_input = solvetrajectory_fetch_data.yaw;
-        if(small_yaw_vision_input > SMALL_YAW_MAN_ANGLE)
-        {
-            small_yaw_vision_input = SMALL_YAW_MAN_ANGLE;
-        }
-        else if (small_yaw_vision_input < SMALL_YAW_MIN_ANGLE)
-        {
-            small_yaw_vision_input = SMALL_YAW_MIN_ANGLE;
-        }
-        gimbal_cmd_send.small_yaw = small_yaw_vision_input + SMALL_YAW_ALIGN_ANGLE - 360.0f; // 确保输入为0时小yaw大yaw对齐朝前
-        if(vision_recv_data->tracking == false)
-        {
-            gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE -360.0f; // 无目标时小yaw对齐
-        }
+        // // 死区判断
+        // float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
+        // float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
+        // // 系数需要调整
+        // gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
+        // gimbal_cmd_send.pitch += 0.0005f * gimbal_pitch_input;
+        // gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE -360.0f;
         
-        // 云台pitch限位
-        if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
-        {
-            gimbal_cmd_send.pitch = PITCH_MAX_ANGLE;
-        }
-        else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
-        {
-            gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
-        }
-        // 云台小YAW限位
-        if(gimbal_cmd_send.small_yaw > SMALL_YAW_MAN_ANGLE)
-        {
-            gimbal_cmd_send.small_yaw = SMALL_YAW_MAN_ANGLE;
-        }
-        else if (gimbal_cmd_send.small_yaw < SMALL_YAW_MIN_ANGLE)
-        {
-            gimbal_cmd_send.small_yaw = SMALL_YAW_MIN_ANGLE;
-        }
+        // // 云台pitch限位
+        // if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
+        // {
+        //     gimbal_cmd_send.pitch = PITCH_MAX_ANGLE;
+        // }
+        // else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
+        // {
+        //     gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
+        // }
 
-        // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
-        chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 25.0f : 0.0f; // _水平方向
-        chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 25.0f : 0.0f; // 1竖直方向
+        // // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
+        // chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 25.0f : 0.0f; // _水平方向
+        // chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 25.0f : 0.0f; // 1竖直方向
     }
-    // 云台参数,确定云台控制数据
-    // if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 左侧开关状态为[中],视觉模式
-    // {
-    //     gimbal_cmd_send.yaw = (vision_recv_data->target_state == NO_TARGET ? gimbal_cmd_send.yaw : vision_recv_data->yaw);
-    //     gimbal_cmd_send.pitch = (vision_recv_data->target_state == NO_TARGET ? gimbal_cmd_send.pitch : vision_recv_data->pitch);
-    // }
     
-    // // 左侧开关状态为[下],或视觉未识别到目标,纯遥控器拨杆控制
-    // if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->target_state == NO_TARGET)
-    // {   
-    //     // 按照摇杆的输出大小进行角度增量,增益系数需调整
-    //     gimbal_cmd_send.yaw -= 0.005f * (float)rc_data[TEMP].rc.rocker_l_;
-    //     gimbal_cmd_send.pitch += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
-    // }
-
-    // 云台软件限位
-    // if(gimbal_cmd_send.pitch > PITCH_MAX)
-    // {
-    //     gimbal_cmd_send.pitch = PITCH_MAX;
-    // }
-    // else if (gimbal_cmd_send.pitch < PITCH_MIN)
-    // {
-    //     gimbal_cmd_send.pitch = PITCH_MIN;
-    // }
-
-    // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
-    // chassis_cmd_send.vx = 50.0f * (float)rc_data[TEMP].rc.rocker_r_; // _水平方向
-    // chassis_cmd_send.vy = 100.0f * (float)rc_data[TEMP].rc.rocker_r1; // 1竖直方向
-
-
-    // 摩擦轮控制,拨轮向上打为负,向下为正
-    // if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 向上超过100,打开摩擦轮
-    //     shoot_cmd_send.friction_mode = FRICTION_ON;
-    // else
-    //     shoot_cmd_send.friction_mode = FRICTION_OFF;
-
-    // // 拨弹控制,遥控器固定为一种拨弹模式,可自行选择
-    // if (switch_is_mid(rc_data[TEMP].rc.switch_left) && rc_data[TEMP].rc.dial < -500)
-    //     shoot_cmd_send.load_mode = LOAD_1_BULLET;
-    // else
-    //     shoot_cmd_send.load_mode = LOAD_STOP;
+    // 发射测试
+    if(switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],发射控制
+    {
+        shoot_cmd_send.shoot_mode = SHOOT_ON;
+        shoot_cmd_send.friction_mode = FRICTION_ON;
+        shoot_cmd_send.bullet_speed = SMALL_AMU_15;
+        // 单发
+        if (rc_data[TEMP].rc.dial < -500)
+            shoot_cmd_send.load_mode = LOAD_1_BULLET;
+        else
+            shoot_cmd_send.load_mode = LOAD_STOP;
+    }
+    else
+    {
+        shoot_cmd_send.friction_mode = FRICTION_OFF;
+        shoot_cmd_send.shoot_mode = SHOOT_OFF;
+    }
 }
 
 
@@ -421,12 +382,13 @@ static void RemoteControlSet()
  */
 static void MouseKeySet()
 {
+
     chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
     chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].s * 300 - rc_data[TEMP].key[KEY_PRESS].d * 300;
 
     gimbal_cmd_send.yaw += (float)rc_data[TEMP].mouse.x / 660 * 10; // 系数待测
     gimbal_cmd_send.pitch += (float)rc_data[TEMP].mouse.y / 660 * 10;
-
+    
     switch (rc_data[TEMP].key_count[KEY_PRESS][Key_Z] % 3) // Z键设置弹速
     {
     case 0:
