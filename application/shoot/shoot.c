@@ -27,16 +27,16 @@ void ShootInit()
         },
         .controller_param_init_config = {
             .speed_PID = {
-                .Kp = 20, // 20
-                .Ki = 1, // 1
+                .Kp = 5, // 5
+                .Ki = 0, // 0
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 10000,
                 .MaxOut = 15000,
             },
             .current_PID = {
-                .Kp = 0.7f, // 0.7
-                .Ki = 0.1f, // 0.1
+                .Kp = 3, // 3
+                .Ki = 0, // 0
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 10000,
@@ -48,7 +48,7 @@ void ShootInit()
             .speed_feedback_source = MOTOR_FEED,
 
             .outer_loop_type = SPEED_LOOP,
-            .close_loop_type = SPEED_LOOP | CURRENT_LOOP,
+            .close_loop_type = CURRENT_LOOP | SPEED_LOOP,
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
         .motor_type = M3508};
@@ -68,13 +68,13 @@ void ShootInit()
         .controller_param_init_config = {
             .angle_PID = {
                 // 如果启用位置环来控制发弹,需要较大的I值保证输出力矩的线性度否则出现接近拨出的力矩大幅下降
-                .Kp = 10, // 10
+                .Kp = 15, // 10
                 .Ki = 5,
                 .Kd = 0,
                 .MaxOut = 200,
             },
             .speed_PID = {
-                .Kp = 10, // 10
+                .Kp = 20, // 10
                 .Ki = 10, // 1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
@@ -82,8 +82,8 @@ void ShootInit()
                 .MaxOut = 5000,
             },
             .current_PID = {
-                .Kp = 0.7f, // 0.7
-                .Ki = 0.1f, // 0.1
+                .Kp = 2, // 0.7
+                .Ki = 0.5f, // 0.1
                 .Kd = 0,
                 .Improve = PID_Integral_Limit,
                 .IntegralLimit = 5000,
@@ -190,8 +190,8 @@ void ShootTask()
             case SMALL_AMU_15:
                 // DJIMotorSetRef(friction_l, 48000);
                 // DJIMotorSetRef(friction_r, 48000);
-                DJIMotorSetRef(friction_l, 4000);
-                DJIMotorSetRef(friction_r, 4000);
+                DJIMotorSetRef(friction_l, 400);
+                DJIMotorSetRef(friction_r, 400);
                 break;
             case SMALL_AMU_18:
                 // DJIMotorSetRef(friction_l, 24000);

@@ -283,7 +283,9 @@ void DJIMotorControl()
             pid_ref += *motor_controller->current_feedforward_ptr;
         if (motor_setting->close_loop_type & CURRENT_LOOP)
         {
-            pid_ref = PIDCalculate(&motor_controller->current_PID, measure->real_current, pid_ref);
+            // 低通滤波
+            measure->current_filtered = 0.8f * measure->current_filtered + 0.2f * measure->real_current;
+            pid_ref = PIDCalculate(&motor_controller->current_PID, measure->current_filtered, pid_ref);
         }
 
         if (motor_setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE)

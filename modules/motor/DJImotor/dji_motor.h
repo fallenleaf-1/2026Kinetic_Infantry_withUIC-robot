@@ -36,6 +36,7 @@ typedef struct
     float angle_single_round; // 单圈角度
     float speed_aps;          // 角速度,单位为:度/秒
     int16_t real_current;     // 实际电流
+    int16_t current_filtered; // 用于电流滤波
     uint8_t temperature;      // 温度 Celsius
 
     float total_angle;   // 总角度,注意方向
