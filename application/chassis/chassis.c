@@ -38,6 +38,7 @@
 static CANCommInstance *chasiss_can_comm; // 双板通信CAN comm
 attitude_t *Chassis_IMU_data;
 #endif // CHASSIS_BOARD
+
 #ifdef ONE_BOARD
 static Publisher_t *chassis_pub;                    // 用于发布底盘的数据
 static Subscriber_t *chassis_sub;                   // 用于订阅底盘的控制命令
@@ -94,7 +95,7 @@ void ChassisInit()
     //  @todo: 当前还没有设置电机的正反转,仍然需要手动添加reference的正负号,需要电机module的支持,待修改.
     // 使用功率控制的电机需要使用PowerControlInit()函数初始化,因为电机的控制方式不同
     
-    // CAN1
+    // // CAN1
     chassis_M3508_motor_config.can_init_config.can_handle = &hcan1;
     chassis_M3508_motor_config.can_init_config.tx_id = 3;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
@@ -104,7 +105,7 @@ void ChassisInit()
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
     
-    // CAN2
+    // // CAN2
     chassis_M3508_motor_config.can_init_config.can_handle = &hcan2;
     chassis_M3508_motor_config.can_init_config.tx_id = 1;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
@@ -146,18 +147,20 @@ void ChassisInit()
         },
         .motor_type = GM6020};
 
-    // CAN1
+
+    // // CAN1
     chassis_GM6020_motor_config.can_init_config.can_handle = &hcan1;
     chassis_GM6020_motor_config.can_init_config.tx_id = 5;
     servo_lf = DJIMotorInit(&chassis_GM6020_motor_config);
     chassis_GM6020_motor_config.can_init_config.tx_id = 1;
     servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
-    // CAN2
+    // // CAN2
     chassis_GM6020_motor_config.can_init_config.can_handle = &hcan2;
     chassis_GM6020_motor_config.can_init_config.tx_id = 6;
     servo_rf = DJIMotorInit(&chassis_GM6020_motor_config);
     chassis_GM6020_motor_config.can_init_config.tx_id = 7;
     servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
+
 
     // 底盘跟随PID初始化
     PID_Init_Config_s Chassis_Follow_PID_config = {
@@ -199,7 +202,7 @@ void ChassisInit()
 
     CANComm_Init_Config_s comm_conf = {
         .can_config = {
-            .can_handle = &hcan2,
+            .can_handle = &hcan1,
             .tx_id = 0x311,
             .rx_id = 0x312,
         },

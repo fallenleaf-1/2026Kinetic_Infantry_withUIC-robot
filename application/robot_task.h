@@ -15,6 +15,7 @@
 #include "HT04.h"
 #include "buzzer.h"
 #include "dmmotor.h"
+#include "solvetrajectory.h"
 
 #include "bsp_log.h"
 
@@ -23,12 +24,14 @@ osThreadId robotTaskHandle;
 osThreadId motorTaskHandle;
 osThreadId daemonTaskHandle;
 osThreadId uiTaskHandle;
+osThreadId solvetrajectoryHandle;
 
 void StartINSTASK(void const *argument);
 void StartMOTORTASK(void const *argument);
 void StartDAEMONTASK(void const *argument);
 void StartROBOTTASK(void const *argument);
 void StartUITASK(void const *argument);
+void StartSOLVETRAJECTORYTASK(void const *argument);
 
 /**
  * @brief 初始化机器人任务,所有持续运行的任务都在这里初始化
@@ -51,6 +54,9 @@ void OSTaskInit()
 
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
+
+    osThreadDef(solvetrajectorytask,StartSOLVETRAJECTORYTASK,osPriorityNormal,0,512);
+    solvetrajectoryHandle = osThreadCreate(osThread(solvetrajectorytask),NULL);
 
     DMMotorControlInit(); // 没有注册DM电机则不会执行
     HTMotorControlInit(); // 没有注册HT电机则不会执行
@@ -139,3 +145,21 @@ __attribute__((noreturn)) void StartUITASK(void const *argument)
         osDelay(1); // 即使没有任何UI需要刷新,也挂起一次,防止卡在UITask中无法切换
     }
 }
+
+__attribute__((noreturn)) void StartSOLVETRAJECTORYTASK(void const *argument)
+{
+    static float solve_dt;
+    static float solve_start;
+    SolveTrajectoryInit();
+    LOGINFO("[freeRTOS] SolveTrajectory Task Start");
+    for (;;)
+    {
+        solve_start = DWT_GetTimeline_ms();
+        SolveTrajectoryTask();   // 单次解算
+        solve_dt = DWT_GetTimeline_ms() - solve_start;
+        if (solve_dt > 5)
+            LOGERROR("[freeRTOS] SolveTrajectory Task is being DELAY! dt = [%f]", &solve_dt);
+        osDelay(5); // 200Hz
+    }
+}
+

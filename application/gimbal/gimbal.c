@@ -141,12 +141,10 @@ void GimbalInit()
         },
         .motor_type = DMMotor};
 
-
     pitch_motor = MITMotorInit(&pitch_config);
     // 电机对total_angle闭环,上电时为零,会保持静止,收到遥控器数据再动
     yaw_motor = DJIMotorInit(&yaw_config);
     small_yaw_motor = DJIMotorInit(&small_yaw_config);
-    
 
     gimbal_pub = PubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
     gimbal_sub = SubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
@@ -184,7 +182,7 @@ void GimbalTask()
         }
         if(gimbal_SmallYaw_Init_Flag == true)
         {
-        // 大yaw采IMU反馈
+            // 大yaw采IMU反馈
             DJIMotorEnable(yaw_motor);
             DJIMotorChangeFeed(yaw_motor, ANGLE_LOOP, OTHER_FEED);
             DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, OTHER_FEED);

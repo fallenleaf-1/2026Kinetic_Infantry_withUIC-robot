@@ -124,6 +124,7 @@ void RobotCMDInit()
     gimbal_feed_sub = SubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
     shoot_cmd_pub = PubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
     shoot_feed_sub = SubRegister("shoot_feed", sizeof(Shoot_Upload_Data_s));
+
     solvetrajectory_need_pub = PubRegister("SolveTrajectory_need",sizeof(SolveTrajectory_Recv_s));
     solvetrajectory_feed_sub = SubRegister("SolveTrajectory_feed",sizeof(SolveTrajectory_Send_s));
 
@@ -256,21 +257,21 @@ static void RemoteControlSet()
                 small_yaw_vision_input = SMALL_YAW_MIN_ANGLE;
             }
 
-            if(pitch_vision_input > (PITCH_MAX_ANGLE - PITCH_MIN_ANGLE))
+            if(pitch_vision_input > PITCH_MAX_ANGLE)
             {
-                pitch_vision_input = PITCH_MAX_ANGLE - PITCH_MIN_ANGLE;
+                pitch_vision_input = PITCH_MAX_ANGLE;
             }
-            else if (pitch_vision_input < 0.0f)
+            else if (pitch_vision_input < PITCH_MIN_ANGLE)
             {
-                pitch_vision_input = 0.0f;
+                pitch_vision_input = PITCH_MIN_ANGLE;
             }
         }else if (vision_recv_data->tracking == false)
         {
             pitch_vision_input = 0.0f;
             small_yaw_vision_input = 0.0f;
         }
-        gimbal_cmd_send.pitch = PITCH_MIN_ANGLE + pitch_vision_input;
-        gimbal_cmd_send.small_yaw = small_yaw_vision_input + SMALL_YAW_ALIGN_ANGLE - 360.0f;// 确保输入为0时小yaw大yaw对齐朝前
+        gimbal_cmd_send.pitch = pitch_vision_input;
+        gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f - small_yaw_vision_input;// 确保输入为0时小yaw大yaw对齐朝前
         
         chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
         chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 5.0f : 0.0f; // 1竖直方向
@@ -332,30 +333,51 @@ static void RemoteControlSet()
     }
     else if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
     {
-        // chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW; // 底盘跟随云台
-        // gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+        chassis_cmd_send.chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW; // 底盘跟随云台
+        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
 
-        // // 死区判断
-        // float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
-        // float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
-        // // 系数需要调整
-        // gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
-        // gimbal_cmd_send.pitch += 0.0005f * gimbal_pitch_input;
-        // gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE -360.0f;
-        
-        // // 云台pitch限位
-        // if(gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
-        // {
-        //     gimbal_cmd_send.pitch = PITCH_MAX_ANGLE;
-        // }
-        // else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
-        // {
-        //     gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
-        // }
+        // 死区判断
+        float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
+        // 系数需要调整
+        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
 
-        // // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
-        // chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 25.0f : 0.0f; // _水平方向
-        // chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 25.0f : 0.0f; // 1竖直方向
+        // 视觉控制
+        static float pitch_vision_input;
+        static float small_yaw_vision_input;
+        if(vision_recv_data->tracking == true)
+        {
+            // 符号等待确定
+            pitch_vision_input += solvetrajectory_fetch_data.pitch;
+            small_yaw_vision_input += solvetrajectory_fetch_data.yaw;
+            // 对弹道解算控制量进行限位
+            if(small_yaw_vision_input > SMALL_YAW_MAN_ANGLE)
+            {
+                small_yaw_vision_input = SMALL_YAW_MAN_ANGLE;
+            }
+            else if (small_yaw_vision_input < SMALL_YAW_MIN_ANGLE)
+            {
+                small_yaw_vision_input = SMALL_YAW_MIN_ANGLE;
+            }
+
+            if(pitch_vision_input > PITCH_MAX_ANGLE)
+            {
+                pitch_vision_input = PITCH_MAX_ANGLE;
+            }
+            else if (pitch_vision_input < PITCH_MIN_ANGLE)
+            {
+                pitch_vision_input = PITCH_MIN_ANGLE;
+            }
+        }else if (vision_recv_data->tracking == false)
+        {
+            pitch_vision_input = 0.0f;
+            small_yaw_vision_input = 0.0f;
+        }
+        gimbal_cmd_send.pitch = pitch_vision_input;
+        gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f - small_yaw_vision_input;// 确保输入为0时小yaw大yaw对齐朝前
+
+        // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
+        chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 25.0f : 0.0f; // _水平方向
+        chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 25.0f : 0.0f; // 1竖直方向
     }
     
     // 发射测试
@@ -384,6 +406,7 @@ static void RemoteControlSet()
  */
 static void MouseKeySet()
 {
+    shoot_cmd_send.shoot_mode = SHOOT_OFF;
 
     chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
     chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].s * 300 - rc_data[TEMP].key[KEY_PRESS].d * 300;
@@ -519,13 +542,12 @@ void RobotCMDTask()
 
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
 
-    setVisionSendData_rpy(-gimbal_fetch_data.gimbal_imu_data.Roll,
-                          -gimbal_fetch_data.gimbal_imu_data.Pitch,
-                          -gimbal_fetch_data.gimbal_imu_data.Yaw);
+    setVisionSendData_rpy(-gimbal_fetch_data.gimbal_imu_data.Roll / (180.0f / PI),
+                          gimbal_fetch_data.gimbal_imu_data.Pitch / (180.0f / PI),
+                          -gimbal_fetch_data.gimbal_imu_data.Yaw / (180.0f / PI));
     setVisionSendData_aim(solvetrajectory_fetch_data.aim_x,
                           solvetrajectory_fetch_data.aim_y,
                           solvetrajectory_fetch_data.aim_z);
-
     // 设置弹道解算数据
     GetSolvetrajectory_need_data();
 

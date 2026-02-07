@@ -23,7 +23,7 @@ void ShootInit()
     // 左摩擦轮
     Motor_Init_Config_s friction_config = {
         .can_init_config = {
-            .can_handle = &hcan1,
+            .can_handle = &hcan2,
         },
         .controller_param_init_config = {
             .speed_PID = {
@@ -52,18 +52,21 @@ void ShootInit()
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
         .motor_type = M3508};
-    friction_config.can_init_config.tx_id = 2,
-    friction_l = DJIMotorInit(&friction_config);
 
-    friction_config.can_init_config.tx_id = 6; // 右摩擦轮,改txid和方向就行
+    friction_config.can_init_config.can_handle = &hcan2;
+    friction_config.can_init_config.tx_id = 1;
+    friction_l = DJIMotorInit(&friction_config);
+    
+    friction_config.can_init_config.tx_id = 5; // 右摩擦轮,改txid和方向就行
     friction_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
     friction_r = DJIMotorInit(&friction_config);
+
 
     // 拨盘电机
     Motor_Init_Config_s loader_config = {
         .can_init_config = {
-            .can_handle = &hcan1,
-            .tx_id = 7,
+            .can_handle = &hcan2,
+            .tx_id = 8,
         },
         .controller_param_init_config = {
             .angle_PID = {
@@ -98,6 +101,7 @@ void ShootInit()
         },
         .motor_type = M2006 // 英雄使用m3508
     };
+
     loader = DJIMotorInit(&loader_config);
 
     shoot_pub = PubRegister("shoot_feed", sizeof(Shoot_Upload_Data_s));
@@ -190,8 +194,8 @@ void ShootTask()
             case SMALL_AMU_15:
                 // DJIMotorSetRef(friction_l, 48000);
                 // DJIMotorSetRef(friction_r, 48000);
-                DJIMotorSetRef(friction_l, 400);
-                DJIMotorSetRef(friction_r, 400);
+                DJIMotorSetRef(friction_l, 15000);
+                DJIMotorSetRef(friction_r, 15000);
                 break;
             case SMALL_AMU_18:
                 // DJIMotorSetRef(friction_l, 24000);
