@@ -52,8 +52,10 @@ void OSTaskInit()
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
     robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
 
+#ifndef CHASSIS_BOARD // 底盘板未初始化裁判系统,UI任务会解引用空指针,不创建
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
+#endif
 
     osThreadDef(solvetrajectorytask,StartSOLVETRAJECTORYTASK,osPriorityNormal,0,512);
     solvetrajectoryHandle = osThreadCreate(osThread(solvetrajectorytask),NULL);

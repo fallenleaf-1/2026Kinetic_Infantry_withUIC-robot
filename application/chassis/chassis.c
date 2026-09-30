@@ -95,23 +95,23 @@ void ChassisInit()
     //  @todo: 当前还没有设置电机的正反转,仍然需要手动添加reference的正负号,需要电机module的支持,待修改.
     // 使用功率控制的电机需要使用PowerControlInit()函数初始化,因为电机的控制方式不同
     
-    // // CAN1
+    // // CAN1: 前两轮 LF/RF (电调ID: LF=1, RF=3)
     chassis_M3508_motor_config.can_init_config.can_handle = &hcan1;
-    chassis_M3508_motor_config.can_init_config.tx_id = 3;
+    chassis_M3508_motor_config.can_init_config.tx_id = 1;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_lf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    chassis_M3508_motor_config.can_init_config.tx_id = 4;
-    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
-    motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
-    
-    // // CAN2
-    chassis_M3508_motor_config.can_init_config.can_handle = &hcan2;
-    chassis_M3508_motor_config.can_init_config.tx_id = 1;
+    chassis_M3508_motor_config.can_init_config.tx_id = 3;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_rf = DJIMotorInit(&chassis_M3508_motor_config);
 
-    chassis_M3508_motor_config.can_init_config.tx_id = 5;
+    // // CAN2: 后两轮 LB/RB (电调ID: LB=1, RB=3)
+    chassis_M3508_motor_config.can_init_config.can_handle = &hcan2;
+    chassis_M3508_motor_config.can_init_config.tx_id = 1;
+    chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+    motor_lb = DJIMotorInit(&chassis_M3508_motor_config);
+
+    chassis_M3508_motor_config.can_init_config.tx_id = 3;
     chassis_M3508_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     motor_rb = DJIMotorInit(&chassis_M3508_motor_config);
 
@@ -148,17 +148,17 @@ void ChassisInit()
         .motor_type = GM6020};
 
 
-    // // CAN1
+    // // CAN1: 前两轮舵向 LF/RF (电调ID: LF=2, RF=4)
     chassis_GM6020_motor_config.can_init_config.can_handle = &hcan1;
-    chassis_GM6020_motor_config.can_init_config.tx_id = 5;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 2;
     servo_lf = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 1;
-    servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
-    // // CAN2
-    chassis_GM6020_motor_config.can_init_config.can_handle = &hcan2;
-    chassis_GM6020_motor_config.can_init_config.tx_id = 6;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 4;
     servo_rf = DJIMotorInit(&chassis_GM6020_motor_config);
-    chassis_GM6020_motor_config.can_init_config.tx_id = 7;
+    // // CAN2: 后两轮舵向 LB/RB (电调ID: LB=2, RB=4)
+    chassis_GM6020_motor_config.can_init_config.can_handle = &hcan2;
+    chassis_GM6020_motor_config.can_init_config.tx_id = 2;
+    servo_lb = DJIMotorInit(&chassis_GM6020_motor_config);
+    chassis_GM6020_motor_config.can_init_config.tx_id = 4;
     servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
 
 

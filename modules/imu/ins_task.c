@@ -123,6 +123,7 @@ attitude_t *INS_Init(void)
     return &(INS.attitude); // 返回最终姿态数据的指针
 }
 
+#ifndef CHASSIS_BOARD // 底盘板没有小yaw电机,small_yaw_motor为NULL,不能解引用
 static float CalcSmallYawOffsetAngle()
 {
     // 别名angle提高可读性,不然太长了不好看,虽然基本不会动这个函数
@@ -148,6 +149,7 @@ static float CalcSmallYawOffsetAngle()
 #endif
     return offset_angle;
 }
+#endif // !CHASSIS_BOARD
 
 /* 注意以1kHz的频率运行此任务 */
 void INS_Task(void)
@@ -208,7 +210,9 @@ void INS_Task(void)
         INS.attitude.Pitch = INS.Pitch;
         INS.attitude.Yaw = INS.Yaw;
         INS.attitude.YawTotalAngle = INS.YawTotalAngle;
+#ifndef CHASSIS_BOARD // 底盘板没有小yaw电机,不能计算大yaw反馈
         INS.attitude.BigYaw_Feed = INS.YawTotalAngle - CalcSmallYawOffsetAngle(); // 计算大yaw反馈值
+#endif
         
 
     }
