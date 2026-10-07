@@ -48,11 +48,12 @@ static Chassis_Ctrl_Cmd_s chassis_cmd_recv;         // 底盘接收到的控制�
 static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数据
 static attitude_t *gimba_IMU_data; // 云台IMU数据
 
-static PIDInstance buffer_PID;             // 用于底盘的缓冲能量PID
-static referee_info_t *referee_data;       // 用于获取裁判系统的数据
-static Referee_Interactive_info_t ui_data; // UI数据，将底盘中的数据传入此结构体的对应变量中，UI会自动检测是否变化，对应显示UI
+// 以下裁判系统/超级电容变量随阶段D.4(裁判系统接回)一起恢复,当前其全部使用点均为注释代码,先注释声明避免未使用告警
+// static PIDInstance buffer_PID;             // 用于底盘的缓冲能量PID
+// static referee_info_t *referee_data;       // 用于获取裁判系统的数据
+// static Referee_Interactive_info_t ui_data; // UI数据，将底盘中的数据传入此结构体的对应变量中，UI会自动检测是否变化，对应显示UI
 
-static SuperCapInstance *cap;                                       // 超级电容
+// static SuperCapInstance *cap; // 超级电容
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
 static DJIMotorInstance *servo_lf, *servo_rf, *servo_lb, *servo_rb; // left right forward back
 
@@ -269,6 +270,8 @@ void chassis_vector_to_M3508_wheel_speed(float vx_set, float vy_set, float wz_se
  */
 static float Normalize180(float a)
 {
+    if (!isfinite(a)) // 非有限输入(Inf/NaN)直接返回,避免while归一化死循环(R31)
+        return a;
     while (a > 180.0f) a -= 360.0f;
     while (a <= -180.0f) a += 360.0f;
     return a;
@@ -281,6 +284,8 @@ static float Normalize180(float a)
  */
 static float Normalize360(float a)
 {
+    if (!isfinite(a)) // 非有限输入(Inf/NaN)直接返回,避免while归一化死循环(R31)
+        return a;
     // 处理大的负数：快速调整到接近[0, 360)范围
     while (a < 0.0f) a += 360.0f;
     while (a >= 360.0f) a -= 360.0f;
@@ -393,15 +398,9 @@ static void LimitChassisOutput()
 
 /**
  * @brief 根据每个轮子的速度反馈,计算底盘的实际运动速度,逆运动解算
- *        对于双板的情况,考虑增加来自底盘板IMU的数据
- *
+ * @note  原空实现 EstimateSpeed() 已删除(A.9/F2):实现轮式里程计需标定轮径/减速比
+ *        并与IMU融合,属独立工作量;TODO.md 保持「未实现」标注
  */
-static void EstimateSpeed()
-{
-    // 根据电机速度和陀螺仪的角速度进行解算,还可以利用加速度计判断是否打滑(如果有)
-    // chassis_feedback_data.vx vy wz =
-    //  ...
-}
 
 /* 机器人底盘控制核心任务 */
 void ChassisTask()
@@ -433,6 +432,7 @@ void ChassisTask()
         DJIMotorStop(servo_rf);
         DJIMotorStop(servo_lb);
         DJIMotorStop(servo_rb);
+        PIDReset(&Chassis_Follow_PID); // 跟随PID在零力期间不计算,复位防止残留积分在切回跟随模式时释放(F7)
     }
     else
     { // 正常工作
@@ -482,9 +482,6 @@ void ChassisTask()
 
     // 根据裁判系统的反馈数据和电容数据对输出限幅并设定闭环参考值
     LimitChassisOutput();
-
-    // 根据电机的反馈速度和IMU(如果有)计算真实速度
-    EstimateSpeed();
 
     // // 获取裁判系统数据   建议将裁判系统与底盘分离，所以此处数据应使用消息中心发送
     // // 我方颜色id小于7是红色,大于7是蓝色,注意这里发送的是对方的颜色, 0:blue , 1:red

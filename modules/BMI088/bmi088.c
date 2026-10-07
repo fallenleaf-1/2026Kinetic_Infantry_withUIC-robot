@@ -3,8 +3,6 @@
 #include "user_lib.h"
 #include "daemon.h"
 
-static DaemonInstance *bmi088_daemon_instance;
-
 // ---------------------------以下私有函数,用于读写BMI088寄存器封装,blocking--------------------------------//
 /**
  * @brief 读取BMI088寄存器Accel. BMI088要求在不释放CS的情况下连续读取
@@ -228,7 +226,6 @@ static void BMI088GyroINTCallback(GPIOInstance *gpio)
     bmi088 = (BMI088Instance *)(gpio->id);
     bmi088->update_flag.imu_ready = 1;
     bmi088->update_flag.gyro = 1;
-    uint8_t whoami_check = 0;
     //do{BMI088GyroRead(bmi088, BMI088_GYRO_CHIP_ID, &whoami_check, 1);}while(whoami_check != BMI088_GYRO_CHIP_ID_VALUE);
 
     BMI088GyroRead(bmi088, BMI088_GYRO_X_L, buf, 6);

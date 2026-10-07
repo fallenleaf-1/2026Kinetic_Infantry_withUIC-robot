@@ -15,8 +15,9 @@ typedef struct daemon_ins
     uint16_t reload_count;     // 重载值
     offline_callback callback; // 异常处理函数,当模块发生异常时会被调用
 
-    uint16_t temp_count; // 当前值,减为零说明模块离线或异常
-    void *owner_id;      // daemon实例的地址,初始化的时候填入
+    volatile uint16_t temp_count; // 当前值,减为零说明模块离线或异常(ISR写/任务读改写,必须volatile,见F8)
+    void *owner_id;               // daemon实例的地址,初始化的时候填入
+    uint8_t reported;             // 离线上报标志:超时只回调一次,重新在线后自动清零(F3)
 } DaemonInstance;
 
 /* daemon初始化配置 */

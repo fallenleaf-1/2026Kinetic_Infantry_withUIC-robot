@@ -13,7 +13,8 @@ static void CheckName(char *name)
 {
     if (strnlen(name, MAX_TOPIC_NAME_LEN + 1) >= MAX_TOPIC_NAME_LEN)
     {
-        LOGERROR("EVENT NAME TOO LONG:%s", name);
+        LOGERROR("EVENT NAME TOO LONG:%s", name); // 响亮停机:只打印一次,日志关闭时用BSP_FaultCode观测(R5)
+        BSP_FaultCode = 1;
         while (1)
             ; // 进入这里说明话题名超出长度限制
     }
@@ -23,7 +24,8 @@ static void CheckLen(uint8_t len1, uint8_t len2)
 {
     if (len1 != len2)
     {
-        LOGERROR("EVENT LEN NOT SAME:%d,%d", len1, len2);
+        LOGERROR("EVENT LEN NOT SAME:%d,%d", len1, len2); // 响亮停机:只打印一次,日志关闭时用BSP_FaultCode观测(R5)
+        BSP_FaultCode = 1;
         while (1)
             ; // 进入这里说明相同话题的消息长度却不同
     }
@@ -45,6 +47,13 @@ Publisher_t *PubRegister(char *name, uint8_t data_len)
     } // 遍历完发现尚未创建name对应的话题
     // 在链表尾部创建新的话题并初始化
     node->next_topic_node = (Publisher_t *)malloc(sizeof(Publisher_t));
+    if (node->next_topic_node == NULL) // 初始化期堆分配失败属致命配置错误(R4)
+    {
+        LOGERROR("[message_center] PubRegister malloc failed, check configTOTAL_HEAP_SIZE");
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
     memset(node->next_topic_node, 0, sizeof(Publisher_t));
     node->next_topic_node->data_len = data_len;
     strcpy(node->next_topic_node->topic_name, name);
@@ -57,12 +66,26 @@ Subscriber_t *SubRegister(char *name, uint8_t data_len)
     Publisher_t *pub = PubRegister(name, data_len); // 查找或创建该话题的发布者
     // 创建新的订阅者结点,申请内存,注意要memset因为新空间不一定是空的,可能有之前留存的垃圾值
     Subscriber_t *ret = (Subscriber_t *)malloc(sizeof(Subscriber_t));
+    if (ret == NULL) // 初始化期堆分配失败属致命配置错误(R4)
+    {
+        LOGERROR("[message_center] SubRegister malloc failed, check configTOTAL_HEAP_SIZE");
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
     memset(ret, 0, sizeof(Subscriber_t));
     // 对新建的Subscriber进行初始化
     ret->data_len = data_len; // 设定数据长度
     for (size_t i = 0; i < QUEUE_SIZE; ++i)
     { // 给消息队列的每一个元素分配空间,queue里保存的实际上是数据执指针,这样可以兼容不同的数据长度
         ret->queue[i] = malloc(data_len);
+        if (ret->queue[i] == NULL) // 初始化期堆分配失败属致命配置错误(R4)
+        {
+            LOGERROR("[message_center] SubRegister queue malloc failed, check configTOTAL_HEAP_SIZE");
+            BSP_FaultCode = 1;
+            while (1)
+                ;
+        }
     }
     // 如果是第一个订阅者,特殊处理一下,将first_subs指针指向新建的订阅者(详见文档)
     if (pub->first_subs == NULL)

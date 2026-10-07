@@ -74,12 +74,19 @@ static void CANCommLostCallback(void *cancomm)
 {
     CANCommInstance *comm = (CANCommInstance *)cancomm;
     CANCommResetRx(comm);
-    LOGWARNING("[can_comm] can comm rx[%d] lost, reset rx state.", &comm->can_ins->rx_id);
+    LOGWARNING("[can_comm] can comm rx[%u] lost, reset rx state.", comm->can_ins->rx_id);
 }
 
 CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)
 {
     CANCommInstance *ins = (CANCommInstance *)malloc(sizeof(CANCommInstance));
+    if (ins == NULL)
+    { // 初始化期堆分配失败属致命配置错误,响亮停机(日志一次+故障标志)
+        LOGERROR("[can_comm] CANCommInit malloc failed, check configTOTAL_HEAP_SIZE");
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
     memset(ins, 0, sizeof(CANCommInstance));
 
     ins->recv_data_len = comm_config->recv_data_len;

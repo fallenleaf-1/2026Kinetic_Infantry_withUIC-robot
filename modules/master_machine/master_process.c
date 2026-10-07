@@ -18,13 +18,17 @@
 static Vision_Recv_s recv_data;
 static Vision_Send_s send_data;
 static DaemonInstance *vision_daemon_instance = NULL;
+#ifdef VISION_USE_UART // UART路径专用,VCP配置下不编译避免未使用告警(-Werror)
 static USARTInstance  *vision_usart_instance = NULL;
+#endif
 
 Vision_Recv_Packet_t *pkt_recv;
 
 
 static uint8_t vision_rx_buf[sizeof(Vision_Recv_Packet_t)]; // 接收缓冲区
-static uint16_t vision_0xa5_cnt = 0;                          
+#ifdef VISION_USE_UART // UART路径专用,VCP配置下不编译避免未使用告警(-Werror)
+static uint16_t vision_0xa5_cnt = 0;
+#endif
 static uint16_t vision_crc_cnt = 0;
 static uint16_t vision_rx_cnt = 0;                            // 接收计数器
 /**

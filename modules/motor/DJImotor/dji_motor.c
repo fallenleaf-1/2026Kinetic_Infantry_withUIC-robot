@@ -69,11 +69,12 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
         for (size_t i = 0; i < idx; ++i)
         {
             if (dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle && dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)
-            {
-                LOGERROR("[dji_motor] ID crash. Check in debug mode, add dji_motor_instance to watch to get more information.");
+            { // id冲突属初始化配置错误,响亮停机(只打印一次,R5);6020的id 1-4和2006/3508的id 5-8会冲突
                 uint16_t can_bus = config->can_handle == &hcan1 ? 1 : 2;
-                while (1) // 6020的id 1-4和2006/3508的id 5-8会发生冲突(若有注册,即1!5,2!6,3!7,4!8) (1!5!,LTC! (((不是)
-                    LOGERROR("[dji_motor] id [%d], can_bus [%d]", config->rx_id, can_bus);
+                LOGERROR("[dji_motor] ID crash. rx [%u], can_bus [%u]. Check in debug mode, add dji_motor_instance to watch to get more information.", config->rx_id, can_bus);
+                BSP_FaultCode = 1;
+                while (1)
+                    ;
             }
         }
         break;
@@ -98,18 +99,23 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
         for (size_t i = 0; i < idx; ++i)
         {
             if (dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle && dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)
-            {
-                LOGERROR("[dji_motor] ID crash. Check in debug mode, add dji_motor_instance to watch to get more information.");
+            { // id冲突属初始化配置错误,响亮停机(只打印一次,R5)
                 uint16_t can_bus = config->can_handle == &hcan1 ? 1 : 2;
-                while (1) // 6020的id 1-4和2006/3508的id 5-8会发生冲突(若有注册,即1!5,2!6,3!7,4!8) (1!5!,LTC! (((不是)
-                    LOGERROR("[dji_motor] id [%d], can_bus [%d]", config->rx_id, can_bus);
+                LOGERROR("[dji_motor] ID crash. rx [%u], can_bus [%u]. Check in debug mode, add dji_motor_instance to watch to get more information.", config->rx_id, can_bus);
+                BSP_FaultCode = 1;
+                while (1)
+                    ;
             }
         }
         break;
 
     default: // other motors should not be registered here
+    { // 电机类型错误属初始化配置错误,响亮停机(只打印一次,R5)
+        LOGERROR("[dji_motor] You must not register other motors using the API of DJI motor."); // 其他电机不应该在这里注册
+        BSP_FaultCode = 1;
         while (1)
-            LOGERROR("[dji_motor]You must not register other motors using the API of DJI motor."); // 其他电机不应该在这里注册
+            ;
+    }
     }
 }
 
@@ -141,7 +147,11 @@ static void DecodeDJIMotor(CANInstance *_instance)
     measure->temperature = rxbuff[6];
 
     // 多圈角度计算,前提是假设两次采样间电机转过的角度小于180°,自己画个图就清楚计算过程了
-    if (measure->ecd - measure->last_ecd > 4096)
+    if (motor->ecd_first_frame)
+    { // 首帧只做初始化基准,不计算圈数,避免last_ecd=0与真实ecd比较导致±360°整圈错位(F4)
+        motor->ecd_first_frame = 0;
+    }
+    else if (measure->ecd - measure->last_ecd > 4096)
         measure->total_round--;
     else if (measure->ecd - measure->last_ecd < -4096)
         measure->total_round++;
@@ -153,13 +163,26 @@ static void DJIMotorLostCallback(void *motor_ptr)
     DJIMotorInstance *motor = (DJIMotorInstance *)motor_ptr;
     uint16_t can_bus = motor->motor_can_instance->can_handle == &hcan1 ? 1 : 2;
     LOGWARNING("[dji_motor] Motor lost, can bus [%d] , id [%d]", can_bus, motor->motor_can_instance->tx_id);
+    // 离线时清参考并复位PID,防止冻结反馈下梯形积分持续累积、恢复瞬间一次性释放窜车(F3,与F7联动)
+    motor->motor_controller.pid_ref = 0;
+    PIDReset(&motor->motor_controller.current_PID);
+    PIDReset(&motor->motor_controller.speed_PID);
+    PIDReset(&motor->motor_controller.angle_PID);
 }
 
 // 电机初始化,返回一个电机实例
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
 {
     DJIMotorInstance *instance = (DJIMotorInstance *)malloc(sizeof(DJIMotorInstance));
+    if (instance == NULL) // 初始化期堆分配失败属致命配置错误(R4)
+    {
+        LOGERROR("[dji_motor] DJIMotorInit malloc failed, check configTOTAL_HEAP_SIZE");
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
     memset(instance, 0, sizeof(DJIMotorInstance));
+    instance->ecd_first_frame = 1; // 编码器首帧只做初始化基准(F4)
 
     // motor basic setting 电机基本设置
     instance->motor_type = config->motor_type;                         // 6020 or 2006 or 3508
@@ -192,6 +215,13 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
     instance->daemon = DaemonRegister(&daemon_config);
 
     DJIMotorEnable(instance);
+    if (idx >= DJI_MOTOR_CNT) // 注册表越界检查,不越界写(R6),响亮停机(R5)
+    {
+        LOGERROR("[dji_motor] motor instance exceeded MAX num [%d]", DJI_MOTOR_CNT);
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
     dji_motor_instance[idx++] = instance;
     return instance;
 }
@@ -210,6 +240,11 @@ void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback
 void DJIMotorStop(DJIMotorInstance *motor)
 {
     motor->stop_flag = MOTOR_STOP;
+    // 停止时复位PID计算区,防止停止期间积存的积分在重新使能瞬间一次性释放(窜车,F7)
+    // 注意:DJIMotorEnable()不重置——零力模式下每5ms成对调用Stop/Enable,两处都清会永远建不起积分
+    PIDReset(&motor->motor_controller.current_PID);
+    PIDReset(&motor->motor_controller.speed_PID);
+    PIDReset(&motor->motor_controller.angle_PID);
 }
 
 void DJIMotorEnable(DJIMotorInstance *motor)
@@ -245,6 +280,16 @@ void DJIMotorControl()
     for (size_t i = 0; i < idx; ++i)
     { // 减小访存开销,先保存指针引用
         motor = dji_motor_instance[i];
+        group = motor->sender_group;
+        num = motor->message_num;
+
+        // 反馈离线旁路(F3):跳过PID计算防止冻结反馈下积分持续累积,槽位置零,恢复后从零积分起步
+        if (motor->daemon && !DaemonIsOnline(motor->daemon))
+        {
+            memset(sender_assignment[group].tx_buff + 2 * num, 0, sizeof(uint16_t));
+            continue;
+        }
+
         motor_setting = &motor->motor_settings;
         motor_controller = &motor->motor_controller;
         measure = &motor->measure;
@@ -294,9 +339,7 @@ void DJIMotorControl()
         // 获取最终输出
         set = (int16_t)pid_ref;
 
-        // 分组填入发送数据
-        group = motor->sender_group;
-        num = motor->message_num;
+        // 分组填入发送数据(group/num已在循环开头保存)
         sender_assignment[group].tx_buff[2 * num] = (uint8_t)(set >> 8);         // 低八位
         sender_assignment[group].tx_buff[2 * num + 1] = (uint8_t)(set & 0x00ff); // 高八位
 

@@ -4,6 +4,7 @@
 #include "SEGGER_RTT.h"
 #include "SEGGER_RTT_Conf.h"
 #include <stdio.h>
+#include <stdint.h>
 
 #define BUFFER_INDEX 0
 
@@ -12,6 +13,12 @@
  *
  */
 void BSPLogInit();
+
+/**
+ * @brief 初始化期致命错误停机标志(非零=因配置错误停机).
+ *        所有 LOGERROR + while(1) 停机点都会置1;日志系统关闭时用调试器观察.
+ */
+extern volatile uint8_t BSP_FaultCode;
 
 /**
  * @brief 日志功能原型,供下面的LOGI,LOGW,LOGE等使用

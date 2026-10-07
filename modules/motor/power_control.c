@@ -15,7 +15,7 @@ static DJIMotorInstance *dji_motor_instance[DJI_MOTOR_CNT] = {NULL}; // 会在co
 static float initial_torque[4];                                      // 电机输出轴实际转矩，单位N·m
 static float A, B, C;                                                // 测试用
 static float power_control_out[4], initial_give_power[4];            // 电机输出功率
-static float chassis_max_power, chassis_power, initial_total_power = 0.0f;
+static float chassis_max_power, initial_total_power = 0.0f; // chassis_power从未被引用,已删除
 /**
  * @brief 由于DJI电机发送以四个一组的形式进行,故对其进行特殊处理,用6个(2can*3group)can_instance专门负责发送
  *        该变量将在 DJIMotorControl() 中使用,分组在 MotorSenderGrouping()中进行
@@ -179,6 +179,13 @@ DJIMotorInstance *PowerControlInit(Motor_Init_Config_s *config)
 {
 
     DJIMotorInstance *instance = (DJIMotorInstance *)malloc(sizeof(DJIMotorInstance));
+    if (instance == NULL) // 初始化期堆分配失败属致命配置错误(R4)
+    {
+        LOGERROR("[power_control] PowerControlInit malloc failed, check configTOTAL_HEAP_SIZE");
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
     memset(instance, 0, sizeof(DJIMotorInstance));
 
     // motor basic setting 电机基本设置

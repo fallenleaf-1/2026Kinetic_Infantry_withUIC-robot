@@ -64,6 +64,7 @@ typedef struct
     DaemonInstance* daemon;
     uint32_t feed_cnt;
     float dt;
+    uint8_t ecd_first_frame; // 编码器首帧标志:首帧只初始化基准不计算圈数,避免last_ecd=0导致±360°整圈错位(F4)
 } DJIMotorInstance;
 
 /**

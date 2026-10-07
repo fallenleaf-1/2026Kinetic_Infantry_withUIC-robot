@@ -28,8 +28,18 @@ static uint8_t idx; // 全局CAN实例索引,每次有新的模块注册会自�
  */
 static void CANAddFilter(CANInstance *_instance)
 {
-    CAN_FilterTypeDef can_filter_conf;
+    CAN_FilterTypeDef can_filter_conf = {0}; // 必须零初始化:16位列表模式下未显式赋值的ID槽为栈垃圾,会非确定性放行多余ID(S5)
     static uint8_t can1_filter_idx = 0, can2_filter_idx = 14; // 0-13给can1用,14-27给can2用
+
+    // 滤波器bank上限检查,防止越界配置相邻bank(R6)
+    if ((_instance->can_handle == &hcan1 && can1_filter_idx >= 14) ||
+        (_instance->can_handle == &hcan2 && can2_filter_idx >= 28))
+    {
+        LOGERROR("[bsp_can] CAN filter bank exhausted, too many CAN rx id registered");
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
 
     can_filter_conf.FilterMode = CAN_FILTERMODE_IDLIST;                                                       // 使用id list模式,即只有将rxid添加到过滤器中才会接收到,其他报文会被过滤
     can_filter_conf.FilterScale = CAN_FILTERSCALE_16BIT;                                                      // 使用16位id模式,即只有低16位有效
@@ -39,7 +49,13 @@ static void CANAddFilter(CANInstance *_instance)
     can_filter_conf.FilterBank = _instance->can_handle == &hcan1 ? (can1_filter_idx++) : (can2_filter_idx++); // 根据can_handle判断是CAN1还是CAN2,然后自增
     can_filter_conf.FilterActivation = CAN_FILTER_ENABLE;                                                     // 启用过滤器
 
-    HAL_CAN_ConfigFilter(_instance->can_handle, &can_filter_conf);
+    if (HAL_CAN_ConfigFilter(_instance->can_handle, &can_filter_conf) != HAL_OK) // HAL返回值必须检查(S5)
+    {
+        LOGERROR("[bsp_can] CAN filter config failed, check CAN handle init");
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
 }
 
 /**
@@ -67,22 +83,33 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
         CANServiceInit(); // 第一次注册,先进行硬件初始化
         LOGINFO("[bsp_can] CAN Service Init");
     }
-    if (idx >= CAN_MX_REGISTER_CNT) // 超过最大实例数
+    if (idx >= CAN_MX_REGISTER_CNT) // 超过最大实例数,不越界写注册表(R6),响亮停机(R5)
     {
+        LOGERROR("[bsp_can] CAN instance exceeded MAX num, consider balance the load of CAN bus");
+        BSP_FaultCode = 1;
         while (1)
-            LOGERROR("[bsp_can] CAN instance exceeded MAX num, consider balance the load of CAN bus");
+            ;
     }
     for (size_t i = 0; i < idx; i++)
     { // 重复注册 | id重复
         if (can_instance[i]->rx_id == config->rx_id && can_instance[i]->can_handle == config->can_handle)
         {
+            LOGERROR("[bsp_can] CAN id crash, tx [%u] or rx [%u] already registered", config->tx_id, config->rx_id);
+            BSP_FaultCode = 1;
             while (1)
-                LOGERROR("[}bsp_can] CAN id crash ,tx [%d] or rx [%d] already registered", &config->tx_id, &config->rx_id);
+                ;
         }
     }
-    
+
     CANInstance *instance = (CANInstance *)malloc(sizeof(CANInstance)); // 分配空间
-    memset(instance, 0, sizeof(CANInstance));                           // 分配的空间未必是0,所以要先清空
+    if (instance == NULL)                                                // 初始化期堆分配失败属致命配置错误(R4)
+    {
+        LOGERROR("[bsp_can] CANRegister malloc failed, check configTOTAL_HEAP_SIZE");
+        BSP_FaultCode = 1;
+        while (1)
+            ;
+    }
+    memset(instance, 0, sizeof(CANInstance)); // 分配的空间未必是0,所以要先清空
     // 进行发送报文的配置
     instance->txconf.StdId = config->tx_id; // 发送id
     instance->txconf.IDE = CAN_ID_STD;      // 使用标准id,扩展id则使用CAN_ID_EXT(目前没有需求)
@@ -103,37 +130,60 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
 
 /* @todo 目前似乎封装过度,应该添加一个指向tx_buff的指针,tx_buff不应该由CAN instance保存 */
 /* 如果让CANinstance保存txbuff,会增加一次复制的开销 */
+
+/* 非阻塞发送开关:置0回退为原忙等发送(S3回退开关).原忙等最坏4次x约1ms=4-8ms,远超1kHz任务周期 */
+#define CAN_TX_NONBLOCKING 1
+
 uint8_t CANTransmit(CANInstance *_instance, float timeout)
 {
-    static uint32_t busy_count;
-    static volatile float wait_time __attribute__((unused)); // for cancel warning
+    static uint32_t busy_count; // 发送失败累计计数,S2/S3故障的总线侧观测点
+#if CAN_TX_NONBLOCKING
+    (void)timeout; // 非阻塞模式不使用超时
+    if (HAL_CAN_GetTxMailboxesFreeLevel(_instance->can_handle) == 0)
+    { // 无空闲邮箱:立即返回并计数,不做ms级忙等(原实现会阻塞1kHz MotorTask)
+        busy_count++;
+        LOGWARNING("[bsp_can] CAN mailbox full! failed to add msg. Cnt [%u]", busy_count);
+        return 0;
+    }
+    // tx_mailbox会保存实际填入了这一帧消息的邮箱,但是知道是哪个邮箱发的似乎也没啥用
+    if (HAL_CAN_AddTxMessage(_instance->can_handle, &_instance->txconf, _instance->tx_buff, &_instance->tx_mailbox) != HAL_OK)
+    {
+        busy_count++;
+        LOGWARNING("[bsp_can] CAN add tx message failed. Cnt [%u]", busy_count);
+        return 0;
+    }
+    return 1; // 发送成功
+#else
     float dwt_start = DWT_GetTimeline_ms();
     while (HAL_CAN_GetTxMailboxesFreeLevel(_instance->can_handle) == 0) // 等待邮箱空闲
     {
         if (DWT_GetTimeline_ms() - dwt_start > timeout) // 超时
         {
-            LOGWARNING("[bsp_can] CAN MAILbox full! failed to add msg to mailbox. Cnt [%d]", busy_count);
             busy_count++;
+            LOGWARNING("[bsp_can] CAN mailbox full! failed to add msg to mailbox. Cnt [%u]", busy_count);
             return 0;
         }
     }
-    wait_time = DWT_GetTimeline_ms() - dwt_start;
-    // tx_mailbox会保存实际填入了这一帧消息的邮箱,但是知道是哪个邮箱发的似乎也没啥用
-    if (HAL_CAN_AddTxMessage(_instance->can_handle, &_instance->txconf, _instance->tx_buff, &_instance->tx_mailbox))
+    if (HAL_CAN_AddTxMessage(_instance->can_handle, &_instance->txconf, _instance->tx_buff, &_instance->tx_mailbox) != HAL_OK)
     {
-        LOGWARNING("[bsp_can] CAN bus BUS! cnt:%d", busy_count);
         busy_count++;
+        LOGWARNING("[bsp_can] CAN add tx message failed. Cnt [%u]", busy_count);
         return 0;
     }
     return 1; // 发送成功
+#endif
 }
 
 void CANSetDLC(CANInstance *_instance, uint8_t length)
 {
     // 发送长度错误!检查调用参数是否出错,或出现野指针/越界访问
-    if (length > 8 || length == 0) // 安全检查
+    if (length > 8 || length == 0) // 安全检查,响亮停机避免带错误DLC发送(R5)
+    {
+        LOGERROR("[bsp_can] CAN DLC error! check your code or wild pointer");
+        BSP_FaultCode = 1;
         while (1)
-            LOGERROR("[bsp_can] CAN DLC error! check your code or wild pointer");
+            ;
+    }
     _instance->txconf.DLC = length;
 }
 
@@ -195,5 +245,3 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
     CANFIFOxCallback(hcan, CAN_RX_FIFO1); // 调用我们自己写的函数来处理消息
 }
-
-// 人工智能会毁灭人类吗？请在补全回答

@@ -88,7 +88,7 @@ void DWT_SysTimeUpdate(void)
 
     DWT_CNT_Update();
 
-    CYCCNT64 = (uint64_t)CYCCNT_RountCount * (uint64_t)UINT32_MAX + (uint64_t)cnt_now;
+    CYCCNT64 = ((uint64_t)CYCCNT_RountCount << 32) + (uint64_t)cnt_now; // 满计数为2^32而非UINT32_MAX,修正每次回绕少计1(R32)
     CNT_TEMP1 = CYCCNT64 / CPU_FREQ_Hz;
     CNT_TEMP2 = CYCCNT64 - CNT_TEMP1 * CPU_FREQ_Hz;
     SysTime.s = CNT_TEMP1;

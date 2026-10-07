@@ -94,6 +94,8 @@ typedef struct
     float dt;
 
     PID_ErrorHandler_t ERRORHandler;
+
+    uint8_t First_Calc; // 首次计算标志:为1时PIDCalculate跳过微分项,避免Last_Measure/Last_Err=0基准的D项冲击(F6);PIDReset后重新置1(F7)
 } PIDInstance;
 
 /* 用于PID初始化的结构体*/
@@ -132,5 +134,13 @@ void PIDInit(PIDInstance *pid, PID_Init_Config_s *config);
  * @return float  PID计算输出
  */
 float PIDCalculate(PIDInstance *pid, float measure, float ref);
+
+/**
+ * @brief 复位PID计算区(保留配置区Kp..Derivative_LPF_RC),并将First_Calc重新置1
+ *        在电机Stop/反馈离线/模式切换时调用,防止积分积存在重新使能瞬间一次性释放(窜车,F7)
+ *
+ * @param pid PID实例指针
+ */
+void PIDReset(PIDInstance *pid);
 
 #endif

@@ -77,7 +77,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         INS_Task();
         ins_dt = DWT_GetTimeline_ms() - ins_start;
         if (ins_dt > 1)
-            LOGERROR("[freeRTOS] INS Task is being DELAY! dt = [%f]", &ins_dt);
+            LOGERROR("[freeRTOS] INS Task is being DELAY! dt = [%u]ms", (uint32_t)ins_dt);
         VisionSend(); // 解算完成后发送视觉数据,但是当前的实现不太优雅,后续若添加硬件触发需要重新考虑结构的组织
         osDelay(1);
     }
@@ -94,7 +94,7 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
         MotorControlTask();
         motor_dt = DWT_GetTimeline_ms() - motor_start;
         if (motor_dt > 1)
-            LOGERROR("[freeRTOS] MOTOR Task is being DELAY! dt = [%f]", &motor_dt);
+            LOGERROR("[freeRTOS] MOTOR Task is being DELAY! dt = [%u]ms", (uint32_t)motor_dt);
         osDelay(1);
     }
 }
@@ -113,7 +113,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         BuzzerTask();
         daemon_dt = DWT_GetTimeline_ms() - daemon_start;
         if (daemon_dt > 10)
-            LOGERROR("[freeRTOS] Daemon Task is being DELAY! dt = [%f]", &daemon_dt);
+            LOGERROR("[freeRTOS] Daemon Task is being DELAY! dt = [%u]ms", (uint32_t)daemon_dt);
         osDelay(10);
     }
 }
@@ -130,7 +130,7 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
         RobotTask();
         robot_dt = DWT_GetTimeline_ms() - robot_start;
         if (robot_dt > 5)
-            LOGERROR("[freeRTOS] ROBOT core Task is being DELAY! dt = [%f]", &robot_dt);
+            LOGERROR("[freeRTOS] ROBOT core Task is being DELAY! dt = [%u]ms", (uint32_t)robot_dt);
         osDelay(5);
     }
 }
@@ -160,7 +160,7 @@ __attribute__((noreturn)) void StartSOLVETRAJECTORYTASK(void const *argument)
         SolveTrajectoryTask();   // 单次解算
         solve_dt = DWT_GetTimeline_ms() - solve_start;
         if (solve_dt > 5)
-            LOGERROR("[freeRTOS] SolveTrajectory Task is being DELAY! dt = [%f]", &solve_dt);
+            LOGERROR("[freeRTOS] SolveTrajectory Task is being DELAY! dt = [%u]ms", (uint32_t)solve_dt);
         osDelay(5); // 200Hz
     }
 }

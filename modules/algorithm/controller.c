@@ -134,6 +134,7 @@ void PIDInit(PIDInstance *pid, PID_Init_Config_s *config)
     // utilize the quality of struct that its memeory is continuous
     memcpy(pid, config, sizeof(PID_Init_Config_s));
     // set rest of memory to 0
+    pid->First_Calc = 1; // 首次计算跳过微分项(F6)
     DWT_GetDeltaT(&pid->DWT_CNT);
 }
 
@@ -163,7 +164,14 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
         // 基本的pid计算,使用位置式
         pid->Pout = pid->Kp * pid->Err;
         pid->ITerm = pid->Ki * pid->Err * pid->dt;
-        pid->Dout = pid->Kd * (pid->Err - pid->Last_Err) / pid->dt;
+        if (pid->First_Calc)
+        { // 首拍跳过微分,避免Last_Err/Last_Measure=0基准造成的D项冲击(F6)
+            pid->Dout = 0;
+        }
+        else
+        {
+            pid->Dout = pid->Kd * (pid->Err - pid->Last_Err) / pid->dt;
+        }
 
         // 梯形积分
         if (pid->Improve & PID_Trapezoid_Intergral)
@@ -171,11 +179,11 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
         // 变速积分
         if (pid->Improve & PID_ChangingIntegrationRate)
             f_Changing_Integration_Rate(pid);
-        // 微分先行
-        if (pid->Improve & PID_Derivative_On_Measurement)
+        // 微分先行(首拍跳过,基准无效)
+        if (!pid->First_Calc && (pid->Improve & PID_Derivative_On_Measurement))
             f_Derivative_On_Measurement(pid);
-        // 微分滤波器
-        if (pid->Improve & PID_DerivativeFilter)
+        // 微分滤波器(首拍跳过,基准无效)
+        if (!pid->First_Calc && (pid->Improve & PID_DerivativeFilter))
             f_Derivative_Filter(pid);
         // 积分限幅
         if (pid->Improve & PID_Integral_Limit)
@@ -190,6 +198,8 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
 
         // 输出限幅
         f_Output_Limit(pid);
+
+        pid->First_Calc = 0; // 首次有效计算完成,后续恢复微分
     }
     else // 进入死区, 则清空积分和输出
     {
@@ -205,4 +215,25 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
     pid->Last_ITerm = pid->ITerm;
 
     return pid->Output;
+}
+
+void PIDReset(PIDInstance *pid)
+{ // 复位计算区,保留配置区(Kp..Derivative_LPF_RC);Stop/离线/模式切换时调用,防积存释放窜车(F7)
+    pid->Measure = 0;
+    pid->Last_Measure = 0;
+    pid->Err = 0;
+    pid->Last_Err = 0;
+    pid->Last_ITerm = 0;
+    pid->Pout = 0;
+    pid->Iout = 0;
+    pid->Dout = 0;
+    pid->ITerm = 0;
+    pid->Output = 0;
+    pid->Last_Output = 0;
+    pid->Last_Dout = 0;
+    pid->Ref = 0;
+    pid->ERRORHandler.ERRORCount = 0;
+    pid->ERRORHandler.ERRORType = PID_ERROR_NONE;
+    pid->First_Calc = 1;          // 复位后首拍同样跳过微分
+    DWT_GetDeltaT(&pid->DWT_CNT); // 重新锚定时间基准,避免复位后首个dt异常放大D项
 }

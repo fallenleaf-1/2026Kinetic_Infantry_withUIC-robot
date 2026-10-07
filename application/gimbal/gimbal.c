@@ -21,7 +21,6 @@ static Gimbal_Ctrl_Cmd_s gimbal_cmd_recv;         // 来自cmd的控制信息
 
 static bool gimbal_SmallYaw_Init_Flag = false; // 小YAW电机初始化标志
 
-static BMI088Instance *bmi088; // 云台IMU
 void GimbalInit()
 {   
     gimba_IMU_data = INS_Init(); // IMU先初始化,获取姿态数据指针赋给yaw电机的其他数据来源

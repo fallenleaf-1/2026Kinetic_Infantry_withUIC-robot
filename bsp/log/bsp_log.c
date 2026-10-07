@@ -4,6 +4,9 @@
 #include "SEGGER_RTT_Conf.h"
 #include <stdio.h>
 
+/* 初始化期致命错误停机标志:非零表示固件因配置错误停机(LOGERROR+while(1)路径均置1).
+ * DISABLE_LOG_SYSTEM 关闭日志时,用调试器/Ozone观察此变量即可发现停机原因(具体位置看PC/调用栈) */
+volatile uint8_t BSP_FaultCode = 0;
 
 void BSPLogInit()
 {
