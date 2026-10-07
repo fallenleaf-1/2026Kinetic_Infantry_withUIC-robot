@@ -22,6 +22,7 @@
 #include "bsp_dwt.h"
 #include "referee_UI.h"
 #include "arm_math.h"
+#include <string.h>
 
 /* 根据robot_def.h中的macro自动计算的参数 */
 #define HALF_WHEEL_BASE (WHEEL_BASE / 2.0f)     // 半轴距
@@ -124,7 +125,8 @@ void ChassisInit()
                 .Kp = 50,
                 .Ki = 5,
                 .Kd = 1,
-                .MaxOut = 20000,
+                .MaxOut = 3000, // 角度环输出即速度环参考(deg/s),GM6020物理极限约1920°/s,取1.5倍留超调余量
+                .IntegralLimit = 1000, // 必须为正,否则PID_Integral_Limit会把积分清零(速度环参考量纲为deg/s)
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
             },
             .speed_PID = {
@@ -162,13 +164,13 @@ void ChassisInit()
     servo_rb = DJIMotorInit(&chassis_GM6020_motor_config);
 
 
-    // 底盘跟随PID初始化
+    // 底盘跟随PID(输入offset_angle°,输出wz;因运动学杠杆臂已修正,wz量纲缩小约4.1倍,以下参数为理论预缩放值,场测微调)
     PID_Init_Config_s Chassis_Follow_PID_config = {
-        .Kp = 5.0f,
-        .Ki = 250.0f,
-        .Kd = 0.0015f,
-        .IntegralLimit = 100.0f,
-        .MaxOut = 5000.0f,
+        .Kp = 1.25f,
+        .Ki = 60.0f,
+        .Kd = 0.0004f,
+        .IntegralLimit = 25.0f,
+        .MaxOut = 1250.0f,
         .DeadBand = 0.0f,
         .CoefA = 0.0f,
         .CoefB = 0.0f,
@@ -225,24 +227,41 @@ void ChassisInit()
 
 //将电机转子转向内侧时 修正方向
 int8_t steering_dirt[4] = {1, -1, 1, -1};
-// 改为接收指针，写回调用者的变量       
+// 单摇杆满幅等效的轮速参考上限,超出按比例缩小保持方向比(场测微调)
+#define CHASSIS_WHEEL_SPEED_MAX 16500.0f
+// 改为接收指针，写回调用者的变量
+// 舵轮运动学:x分量旋转杠杆为前后位置HALF_WHEEL_BASE,y分量为左右位置HALF_TRACK_WIDTH(左手系z向下)
 void chassis_vector_to_M3508_wheel_speed(float vx_set, float vy_set, float wz_set,float *vt_lf, float *vt_rf, float *vt_lb, float *vt_rb)
 {
     // float wheel_rpm_ratio;
     // wheel_rpm_ratio = 60.0f / (WHEEL_PERIMETER * 3.14159f) * REDUCTION_RATIO_WHEEL * 1000;
 
-    *vt_lf = (float)(steering_dirt[0] * sqrtf(powf(vy_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       + powf(vx_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
+    *vt_lf = (float)(steering_dirt[0] * sqrtf(powf(vy_set + wz_set * HALF_TRACK_WIDTH,2)
+                       + powf(vx_set + wz_set * HALF_WHEEL_BASE,2)
                        ));
-    *vt_rf = (float)(steering_dirt[1] * sqrtf(powf(vy_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       + powf(vx_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       )); 
-    *vt_lb = (float)(steering_dirt[2] * sqrtf(powf(vy_set + wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       + powf(vx_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       ));                      
-    *vt_rb = (float)(steering_dirt[3] * sqrtf(powf(vy_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
-                       + powf(vx_set - wz_set * RADIUS_WHEEL * 0.707107f,2)
+    *vt_rf = (float)(steering_dirt[1] * sqrtf(powf(vy_set - wz_set * HALF_TRACK_WIDTH,2)
+                       + powf(vx_set + wz_set * HALF_WHEEL_BASE,2)
                        ));
+    *vt_lb = (float)(steering_dirt[2] * sqrtf(powf(vy_set + wz_set * HALF_TRACK_WIDTH,2)
+                       + powf(vx_set - wz_set * HALF_WHEEL_BASE,2)
+                       ));
+    *vt_rb = (float)(steering_dirt[3] * sqrtf(powf(vy_set - wz_set * HALF_TRACK_WIDTH,2)
+                       + powf(vx_set - wz_set * HALF_WHEEL_BASE,2)
+                       ));
+
+    // 平移+自旋组合时参考值可能远超单摇杆满幅,按最大轮速等比缩小,保持各轮方向/速度比不变
+    float vt_max = ABS(*vt_lf);
+    if (ABS(*vt_rf) > vt_max) vt_max = ABS(*vt_rf);
+    if (ABS(*vt_lb) > vt_max) vt_max = ABS(*vt_lb);
+    if (ABS(*vt_rb) > vt_max) vt_max = ABS(*vt_rb);
+    if (vt_max > CHASSIS_WHEEL_SPEED_MAX)
+    {
+        float scale = CHASSIS_WHEEL_SPEED_MAX / vt_max;
+        *vt_lf *= scale;
+        *vt_rf *= scale;
+        *vt_lb *= scale;
+        *vt_rb *= scale;
+    }
 }
 
 /*
@@ -268,7 +287,7 @@ static float Normalize360(float a)
     return a;
 }
 
-static double atan_angle[4];
+static float atan_angle[4];
 /*
  * 计算目标多圈角度（不限制在0~360），并根据最小转角原则决定是否翻转驱动方向
  */
@@ -277,12 +296,14 @@ void chassis_vector_to_GM6020_wheel_angle_ecd(float vx_set, float vy_set, float 
     // GM6020目标角度计算
     if(!(vx_set == 0 && vy_set == 0 && wz_set == 0))//防止除数为零
     {
-        //由于atan2算出来的结果是弧度，需转换成角度 计算公式为 弧度 * 180.f / PI 最终得到角度值 (0.707107f == 根号2)  左手系解算：z下 x右 y前
+        //由于atan2f算出来的结果是弧度，需转换成角度 计算公式为 弧度 * 180.f / PI 最终得到角度值  左手系解算：z下 x右 y前
+        // 注意使用单精度atan2f,Cortex-M4F无双精度硬件,atan2()会走软件库开销极大
+        // 旋转杠杆与轮速解算一致:x分量用HALF_WHEEL_BASE(前后位置),y分量用HALF_TRACK_WIDTH(左右位置)
 
-        atan_angle[0] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;		
-        atan_angle[1] = atan2((vx_set + wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
-        atan_angle[2] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set + wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
-        atan_angle[3] = atan2((vx_set - wz_set * RADIUS_WHEEL * 0.707107f),(vy_set - wz_set * RADIUS_WHEEL * 0.707107f)) * 180.0f / PI;
+        atan_angle[0] = atan2f((vx_set + wz_set * HALF_WHEEL_BASE),(vy_set + wz_set * HALF_TRACK_WIDTH)) * 180.0f / PI;
+        atan_angle[1] = atan2f((vx_set + wz_set * HALF_WHEEL_BASE),(vy_set - wz_set * HALF_TRACK_WIDTH)) * 180.0f / PI;
+        atan_angle[2] = atan2f((vx_set - wz_set * HALF_WHEEL_BASE),(vy_set + wz_set * HALF_TRACK_WIDTH)) * 180.0f / PI;
+        atan_angle[3] = atan2f((vx_set - wz_set * HALF_WHEEL_BASE),(vy_set - wz_set * HALF_TRACK_WIDTH)) * 180.0f / PI;
     }  
     // 目标单圈角度（0..360) 基于偏置+atan结果
     float desired_single[4];
@@ -344,8 +365,9 @@ static void MecanumCalculate()
     // vt_rb = chassis_vx + chassis_vy - chassis_cmd_recv.wz * RB_CENTER;
 
     // 舵轮底盘运动学正解算
-    chassis_vector_to_M3508_wheel_speed(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &vt_lf, &vt_rf, &vt_lb, &vt_rb);
+    // 先解算舵向角(内部更新steering_dirt翻转标志),再解算轮速,保证驱动方向与舵向翻转同拍生效
     chassis_vector_to_GM6020_wheel_angle_ecd(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &angle_lf, &angle_rf, &angle_lb, &angle_rb);
+    chassis_vector_to_M3508_wheel_speed(chassis_vx, chassis_vy, chassis_cmd_recv.wz, &vt_lf, &vt_rf, &vt_lb, &vt_rb);
 }
 
 /**
@@ -384,13 +406,20 @@ static void EstimateSpeed()
 /* 机器人底盘控制核心任务 */
 void ChassisTask()
 {
-    // 后续增加没收到消息的处理(双板的情况)
     // 获取新的控制信息
 #ifdef ONE_BOARD
     SubGetMessage(chassis_sub, &chassis_cmd_recv);
 #endif
 #ifdef CHASSIS_BOARD
-    chassis_cmd_recv = *(Chassis_Ctrl_Cmd_s *)CANCommGet(chasiss_can_comm);
+    if (CANCommIsOnline(chasiss_can_comm)) // 超时约1s(daemon默认reload=100,100Hz)
+    {
+        chassis_cmd_recv = *(Chassis_Ctrl_Cmd_s *)CANCommGet(chasiss_can_comm);
+    }
+    else
+    { // 双板通信离线,清空控制量并进入零力,防止按最后一帧指令持续运动导致失控
+        memset(&chassis_cmd_recv, 0, sizeof(Chassis_Ctrl_Cmd_s));
+        chassis_cmd_recv.chassis_mode = CHASSIS_ZERO_FORCE;
+    }
 #endif // CHASSIS_BOARD
 
     // SetPowerLimit(referee_data->GameRobotState.chassis_power_limit);//设置功率限制
@@ -426,8 +455,8 @@ void ChassisTask()
     case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,采用PID  参数待调试
         chassis_cmd_recv.wz = PIDCalculate(&Chassis_Follow_PID, chassis_cmd_recv.offset_angle, 0.0f);
         break;
-    case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
-        chassis_cmd_recv.wz = 100;
+    case CHASSIS_ROTATE: // 自旋,同时保持全向机动;杠杆臂修正后由100缩放为25,实际转速场测微调,后续增加不规则的变速策略
+        chassis_cmd_recv.wz = 25;
         break;
     default:
         break;
