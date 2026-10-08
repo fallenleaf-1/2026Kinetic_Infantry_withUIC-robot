@@ -52,3 +52,16 @@ build
 .vscode/.cortex-debug.peripherals.state.json
 .vscode/.cortex-debug.registers.state.json
 *.jdebug*
+
+# IDE / editor config
+.idea/
+.cache/
+.Doc/.obsidian/
+
+# build artifacts
+cmake-build-verify/
+cmake-build-debug/
+build/
+
+# local logs
+stm32_Serial.txt
