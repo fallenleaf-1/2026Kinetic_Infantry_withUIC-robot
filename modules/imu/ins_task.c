@@ -22,10 +22,19 @@
 
 #include "robot_def.h"
 #include "gimbal.h"
+#include "bsp_log.h"
 
 // 私有宏,自动将编码器转换成角度值
 #define ECD_ANGLE_COEF_DJI 0.043945f // (360/8192),将编码器值转化为角度制
 #define SMALL_YAW_ALIGN_ANGLE (SMALL_YAW_FORWORD_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360
+
+/* IMU(BMI088)初始化重试上限(ms): 原实现是无日志的无限重试,IMU不响应时整个RobotInit静默卡死
+ * (实测现象: MX外设全部初始化完成、RTT无日志、uwTick停在2ms、电机/舵轮永远收不到指令).
+ * 超时后: LOGERROR + BSP_FaultCode置位; 单板直控(CHASSIS_RC_DIRECT)不依赖IMU(仅跟随模式用),
+ * 返回NULL并继续启动,保证舵轮能初始化与上电回正; 其它构建保留原有"不静默降级"语义
+ * (gimbal.c 会解引用该指针,不能返回NULL). */
+#define INS_INIT_TIMEOUT_MS 3000u
+static uint8_t IMU_Available = 0; // BMI088是否初始化成功,供INS_Task判断能否读传感器
 
 static INS_t INS;
 static IMU_Param_t IMU_Param;
@@ -94,8 +103,32 @@ attitude_t *INS_Init(void)
 
     HAL_TIM_PWM_Start(&htim10, TIM_CHANNEL_1);
 
-    while (BMI088Init(&hspi1, 1) != BMI088_NO_ERROR)
-        ;
+    /* 单板直控不使用姿态(仅跟随模式需要IMU): 跳过零飘标定(6s级,且数据不满足条件时会反复重试),
+     * 避免IMU标定把整个启动挡住——电机/舵轮初始化与上电回正都在其后. 代价只是IMU零飘未标定. */
+#ifdef CHASSIS_RC_DIRECT
+    const uint8_t bmi_calibrate = 0;
+#else
+    const uint8_t bmi_calibrate = 1;
+#endif
+
+    // 有上限的重试: 超时即报告并(按板型)决定继续或响亮停机,不再静默死循环
+    float ins_init_start = DWT_GetTimeline_ms();
+    while (BMI088Init(&hspi1, bmi_calibrate) != BMI088_NO_ERROR)
+    {
+        if (DWT_GetTimeline_ms() - ins_init_start > INS_INIT_TIMEOUT_MS)
+        {
+            LOGERROR("[ins] BMI088 init timeout [%dms], check SPI1 wiring / IMU power", (int)INS_INIT_TIMEOUT_MS);
+            BSP_FaultCode = 1;
+#ifdef CHASSIS_RC_DIRECT
+            IMU_Available = 0;
+            return NULL; // 单板直控不依赖IMU: 继续启动,保证舵轮能初始化与回正(IMU故障由日志/FaultCode可见)
+#else
+            while (1)
+                ; // 其它构建: 云台侧会解引用IMU指针,不能返回NULL,保持不静默降级
+#endif
+        }
+    }
+    IMU_Available = 1;
     IMU_Param.scale[X] = 1;
     IMU_Param.scale[Y] = 1;
     IMU_Param.scale[Z] = 1;
@@ -156,6 +189,9 @@ void INS_Task(void)
 {
     static uint32_t count = 0;
     const float gravity[3] = {0, 0, 9.81f};
+
+    if (!IMU_Available) // IMU未初始化成功: 不读传感器(死数据会污染解算/卡住静止检测),直接返回
+        return;
 
     dt = DWT_GetDeltaT(&INS_DWT_Count);
     t += dt;

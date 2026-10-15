@@ -21,6 +21,30 @@
 #define CHASSIS_BOARD //底盘板
 // #define GIMBAL_BOARD  //云台板
 
+/* 单板(仅底盘板)遥控器直控底盘
+ * 定义后: 遥控器(DBUS)接在【底盘板】USART3,由底盘板解析并直接解算底盘指令
+ *         (见chassis.c RCDirectSet()),不初始化CANComm、不发送0x311上行帧.
+ *         原因: 单板没有云台板,发0x311收不到ACK(总线无对端),邮箱会被占满并拖垮
+ *         CAN1上的前轮指令;且底盘指令原本只来自CANComm,单板下必然恒为零力
+ *         —— 这正是"遥控器接到底盘板却没反应"的真正原因(数据无人消费).
+ * 注释后: 恢复双板路径(遥控器由云台板接收;或按下方RC_RECEIVER_ON_CHASSIS由底盘板转发).
+ * 回退方式: 注释下面一行并重新编译.
+ */
+#define CHASSIS_RC_DIRECT
+
+/* 遥控器接收位置选择(仅双板有效)
+ * 定义后: 遥控器(DBUS)接在【底盘板】USART3,由底盘板解析,并随底盘板上行帧
+ *         (0x311 Chassis_Upload_Data_s,见RC_Data_s)转发给云台板的robot_cmd;
+ *         robot_cmd.c 不再直接读取本板串口,并依据转发帧做遥控器/链路离线保护.
+ * 注意: 该路线依赖0x311的多帧分包传输(38B数据+4B协议头尾=42B,需连发6帧),
+ *       启用前必须先修复CANComm多帧丢帧问题,否则链路恒判离线
+ *       (见.Doc/遥控器改到底盘板实施记录_2026-10-14.md 附录A).
+ *       与CHASSIS_RC_DIRECT互斥: 直控是单板自用,转发是给云台板用.
+ * 注释后: 恢复原状 —— 遥控器接在云台板,由robot_cmd直接解析(原链路零改动).
+ * 回退方式: 注释下面一行并重新编译两块板.
+ */
+// #define RC_RECEIVER_ON_CHASSIS
+
 #define VISION_USE_VCP  // 使用虚拟串口发送视觉数据
 // #define VISION_USE_UART // 使用串口发送视觉数据
 
@@ -45,7 +69,7 @@
 #define S_BIAS 0.1f // 枪口前推的距离 m
 #define Z_BIAS 0.1f // yaw轴电机到枪口水平面的垂直距离 m
 // 机器人底盘修改的参数,单位为mm(毫米)
-#define WHEEL_BASE 350              // 纵向轴距(前进后退方向)
+#define WHEEL_BASE 300              // 纵向轴距(前进后退方向)
 #define TRACK_WIDTH 300             // 横向轮距(左右平移方向)
 #define CENTER_GIMBAL_OFFSET_X 0    // 云台旋转中心距底盘几何中心的距离,前后方向,云台位于正中心时默认设为0
 #define CENTER_GIMBAL_OFFSET_Y 0    // 云台旋转中心距底盘几何中心的距离,左右方向,云台位于正中心时默认设为0
@@ -54,10 +78,10 @@
 #define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
 #define CHASSIS_DEAD_BAND 10   // 底盘速度死区,低于该值的速度指令将被置为0
 //四个驱动电机朝向前方时 转向电机初始编码值
-#define GM6020_LF_ANGLE 192.69f		//装上去的时候Y轴正向对应的角度
-#define GM6020_RF_ANGLE 226.36f
-#define GM6020_RB_ANGLE 133.98f
-#define GM6020_LB_ANGLE 46.53f
+#define GM6020_LF_ANGLE 133.40f		//装上去的时候Y轴正向对应的角度(2026-10-14现场手摆正前方后重标,旧值192.69)
+#define GM6020_RF_ANGLE 223.93f     //旧值226.36
+#define GM6020_RB_ANGLE 134.19f     //旧值133.98
+#define GM6020_LB_ANGLE 102.15f     //旧值46.53
 
 
 #define GYRO2GIMBAL_DIR_YAW 1   // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
@@ -69,6 +93,21 @@
     (defined(ONE_BOARD) && defined(GIMBAL_BOARD)) ||  \
     (defined(CHASSIS_BOARD) && defined(GIMBAL_BOARD))
 #error Conflict board definition! You can only define one board type.
+#endif
+
+// 遥控器直控仅适用于单块底盘板: 无云台板可转发,单板下才由底盘自解算
+#if defined(CHASSIS_RC_DIRECT) && (defined(ONE_BOARD) || defined(GIMBAL_BOARD))
+#error CHASSIS_RC_DIRECT is single-chassis-board only, define CHASSIS_BOARD (not ONE_BOARD/GIMBAL_BOARD).
+#endif
+
+// 直控(单板自用)与转发(给云台板用)两条路线不能同时启用
+#if defined(CHASSIS_RC_DIRECT) && defined(RC_RECEIVER_ON_CHASSIS)
+#error CHASSIS_RC_DIRECT (local control) and RC_RECEIVER_ON_CHASSIS (forward to gimbal) are mutually exclusive.
+#endif
+
+// 遥控器接收挪到底盘板依赖双板配置(底盘板接收转发,云台板robot_cmd使用),单板下无转发对象
+#if defined(RC_RECEIVER_ON_CHASSIS) && defined(ONE_BOARD)
+#error RC_RECEIVER_ON_CHASSIS requires dual-board (CHASSIS_BOARD + GIMBAL_BOARD), not ONE_BOARD.
 #endif
 
 #pragma pack(1) // 压缩结构体,取消字节对齐,下面的数据都可能被传输
@@ -156,9 +195,41 @@ typedef struct
     float chassis_power_mx;
 } Chassis_Power_Data_s;
 
+/* ----------------遥控器数据(定义RC_RECEIVER_ON_CHASSIS时由底盘板随上行帧转发给云台板)---------------- */
+/**
+ * @brief 遥控器(DBUS)数据镜像,字段与robot_cmd实际从RC_ctrl_t读取的部分一一对应
+ * @note  遥控器改由底盘板接收后,底盘板解析出的RC_ctrl_t无法跨板共享(RC_ctrl_t定义在
+ *        remote_control.h中且含位域union),故在此定义用于CAN传输的紧凑结构体,
+ *        并作为Chassis_Upload_Data_s的成员随底盘板上行帧(0x311)一并发送.
+ *        robot_cmd侧通过RCForwardToCtrl()手工映射回本地RC_ctrl_t镜像.
+ *        若后续robot_cmd用到了其他字段(如key[KEY_PRESS_WITH_SHIFT]/mouse.press_l等),
+ *        需同步扩展本结构体并在映射函数中补齐,否则会读到默认值0.
+ */
+typedef struct
+{
+    int16_t rocker_l_;  // 左摇杆水平方向
+    int16_t rocker_l1;  // 左摇杆竖直方向
+    int16_t rocker_r_;  // 右摇杆水平方向
+    int16_t rocker_r1;  // 右摇杆竖直方向
+    int16_t dial;       // 侧边拨轮
+
+    uint8_t switch_left;  // 左侧开关
+    uint8_t switch_right; // 右侧开关
+
+    int16_t mouse_x; // 鼠标x轴移动速度
+    int16_t mouse_y; // 鼠标y轴移动速度
+
+    uint16_t key_press;    // 当前按键位域,对应key[KEY_PRESS].keys
+    uint8_t key_count[16]; // 普通按键按下计数,对应key_count[KEY_PRESS][0..15]
+
+    uint8_t online; // 遥控器在线标志(底盘板RemoteControlIsOnline()结果),供云台板做离线保护
+} RC_Data_s;
+
 /* ----------------CMD应用发布的控制数据,应当由gimbal/chassis/shoot订阅---------------- */
 /**
  * @brief 对于双板情况,遥控器和pc在云台,裁判系统在底盘
+ *        例外: 定义RC_RECEIVER_ON_CHASSIS后,遥控器(DBUS)改接底盘板,遥控器原始数据
+ *              随Chassis_Upload_Data_s上行帧转发给云台板的robot_cmd
  *
  */
 // cmd发布的底盘控制数据,由chassis订阅
@@ -221,6 +292,10 @@ typedef struct
     uint8_t rest_heat;           // 剩余枪口热量
     Bullet_Speed_e bullet_speed; // 弹速限制
     Enemy_Color_e enemy_color;   // 0 for blue, 1 for red
+
+#ifdef RC_RECEIVER_ON_CHASSIS
+    RC_Data_s rc; // 遥控器数据(接收在底盘板,随本上行帧一并转发给云台板的robot_cmd)
+#endif
 
 } Chassis_Upload_Data_s;
 

@@ -2,6 +2,7 @@
 #include "general_def.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
+#include "math.h"
 
 static uint8_t idx = 0; // register idx,是该文件的全局电机索引,在注册时使用
 /* DJI电机的实例,此处仅保存指针,内存的分配将通过电机实例初始化时通过malloc()进行 */
@@ -336,7 +337,14 @@ void DJIMotorControl()
         if (motor_setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE)
             pid_ref *= -1;
 
-        // 获取最终输出
+        // 获取最终输出: 非有限值(NaN/Inf)按0处理,并限幅到int16范围
+        // ((int16_t)NaN 属未定义行为,异常电流会让电调失控;F8)
+        if (!isfinite(pid_ref))
+            pid_ref = 0.0f;
+        else if (pid_ref > 32767.0f)
+            pid_ref = 32767.0f;
+        else if (pid_ref < -32768.0f)
+            pid_ref = -32768.0f;
         set = (int16_t)pid_ref;
 
         // 分组填入发送数据(group/num已在循环开头保存)

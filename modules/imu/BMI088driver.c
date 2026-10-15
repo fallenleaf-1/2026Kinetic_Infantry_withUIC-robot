@@ -10,6 +10,10 @@
 float BMI088_ACCEL_SEN = BMI088_ACCEL_6G_SEN;
 float BMI088_GYRO_SEN = BMI088_GYRO_2000_SEN;
 
+/* 零飘标定外层最大重试次数: 标定不收敛(数据持续不满足静止/范数条件)时的硬上限,
+ * 与函数内的12s时间上限共同保证不会卡死在启动阶段 */
+#define BMI088_CALI_MAX_TRYOUT 5
+
 static uint8_t res = 0;
 static uint8_t write_reg_num = 0;
 static uint8_t error = BMI088_NO_ERROR;
@@ -124,11 +128,14 @@ void Calibrate_MPU_Offset(IMU_Data_t *bmi088)
     int16_t bmi088_raw_temp;
     float gyroMax[3], gyroMin[3];
     float gNormTemp = 0.0f, gNormMax = 0.0f, gNormMin = 0.0f;
+    uint8_t tryOut = 0; // 外层重试次数上限: 标定不收敛时不再无限循环(R5同类:静默死循环)
 
     startTime = DWT_GetTimeline_s();
     do
     {
-        if (DWT_GetTimeline_s() - startTime > 12)
+        // 时间上限 + 次数上限双保险: 时间轴异常或数据一直不满足条件时都能退出
+        tryOut++;
+        if (DWT_GetTimeline_s() - startTime > 12 || tryOut > BMI088_CALI_MAX_TRYOUT)
         {
             // ��????
             bmi088->GyroOffset[0] = GxOFFSET;
@@ -136,7 +143,7 @@ void Calibrate_MPU_Offset(IMU_Data_t *bmi088)
             bmi088->GyroOffset[2] = GzOFFSET;
             bmi088->gNorm = gNORM;
             bmi088->TempWhenCali = 40;
-            LOGERROR("[BMI088] Calibrate Failed! Use offline params");
+            LOGERROR("[BMI088] Calibrate Failed after %d tries! Use offline params", tryOut);
             break;
         }
 

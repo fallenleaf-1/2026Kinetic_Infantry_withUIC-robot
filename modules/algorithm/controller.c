@@ -153,6 +153,34 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
 
     pid->dt = DWT_GetDeltaT(&pid->DWT_CNT); // 获取两次pid计算的时间间隔,用于积分和微分
 
+    // dt异常保护(F8): 微分/积分都要用dt,dt=0(或非有限)会直接产生inf/NaN;
+    // 而NaN一旦被累加进Iout就会永久锁死(死区分支只清Output/ITerm,不清Iout),
+    // 该电机此后永远拿不到力矩(实测: GM6020速度环 Iout=nan 导致四个舵轮全部失效)
+    if (!isfinite(pid->dt) || pid->dt <= 0.0f)
+        pid->dt = 1e-3f;
+    // 状态污染保护(F8): 上一拍若混入非有限值,清掉积分/微分状态,本拍重新起算
+    if (!isfinite(pid->Iout) || !isfinite(pid->Dout) || !isfinite(pid->Last_Err) || !isfinite(pid->Last_Measure))
+    {
+        pid->Iout = 0.0f;
+        pid->Dout = 0.0f;
+        pid->Last_Err = 0.0f;
+        pid->Last_Measure = 0.0f;
+        pid->Last_Dout = 0.0f;
+    }
+    // 反馈/参考本身异常时不下发输出,并清状态,避免异常值经积分器传播到下游
+    if (!isfinite(measure) || !isfinite(ref))
+    {
+        pid->Measure = 0.0f;
+        pid->Ref = ref;
+        pid->Err = 0.0f;
+        pid->Output = 0.0f;
+        pid->ITerm = 0.0f;
+        pid->Iout = 0.0f;
+        pid->Dout = 0.0f;
+        pid->First_Calc = 1; // 下一拍重新跳过微分,不用异常基准算微分
+        return 0.0f;
+    }
+
     // 保存上次的测量值和误差,计算当前error
     pid->Measure = measure;
     pid->Ref = ref;
@@ -208,6 +236,13 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
     }
 
     // 保存当前数据,用于下次计算
+    // 输出仍是非有限值时(理论上已被上面的保护拦住)兜底清零,保证下游拿到的一定是有限值
+    if (!isfinite(pid->Output))
+    {
+        pid->Output = 0.0f;
+        pid->Iout = 0.0f;
+        pid->Dout = 0.0f;
+    }
     pid->Last_Measure = pid->Measure;
     pid->Last_Output = pid->Output;
     pid->Last_Dout = pid->Dout;

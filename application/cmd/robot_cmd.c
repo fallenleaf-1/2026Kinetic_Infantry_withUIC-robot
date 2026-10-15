@@ -14,6 +14,7 @@
 // bsp
 #include "bsp_dwt.h"
 #include "bsp_log.h"
+#include <string.h>
 
 // 私有宏,自动将编码器转换成角度值
 #define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 大YAW对齐时的角度,0-360
@@ -23,6 +24,10 @@
 #ifdef GIMBAL_BOARD // 对双板的兼容,条件编译
 #include "can_comm.h"
 static CANCommInstance *cmd_can_comm; // 双板通信
+#ifdef RC_RECEIVER_ON_CHASSIS
+/* 遥控器接收已挪到底盘板: 遥控器数据随底盘板上行帧(chassis_fetch_data.rc)送达本板,无需新增CAN实例 */
+static RC_ctrl_t rc_remote_ctrl[2]; // 本地镜像,保持既有代码继续以rc_data[TEMP]访问(与remote_control.c一致使用2元素数组)
+#endif                              // RC_RECEIVER_ON_CHASSIS
 #endif
 #ifdef ONE_BOARD
 static Publisher_t *chassis_cmd_pub;   // 底盘控制消息发布者
@@ -118,7 +123,11 @@ void RobotCMDInit()
     //     },
     // };
     //bmi088_test = BMI088Register(&bmi088_config);
+#if defined(RC_RECEIVER_ON_CHASSIS) && defined(GIMBAL_BOARD)
+    // 遥控器(DBUS)已改接到底盘板,本板不再注册遥控器串口,改用底盘板上行帧转发来的数据(见下方rc_data赋值)
+#else
     rc_data = RemoteControlInit(&huart3);   // 修改为对应串口,注意如果是自研板dbus协议串口需选用添加了反相器的那个
+#endif
     vision_recv_data = VisionInit(&huart1); // 视觉通信串口
 
     gimbal_cmd_pub = PubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
@@ -144,6 +153,10 @@ void RobotCMDInit()
         .send_data_len = sizeof(Chassis_Ctrl_Cmd_s),
     };
     cmd_can_comm = CANCommInit(&comm_conf);
+#ifdef RC_RECEIVER_ON_CHASSIS
+    // 遥控器数据来源改为底盘板随其上行帧转发来的镜像(复用0x311链路,无需新增CAN实例)
+    rc_data = rc_remote_ctrl;
+#endif // RC_RECEIVER_ON_CHASSIS
 #endif // GIMBAL_BOARD
 
     gimbal_cmd_send.pitch = 0.0f;
@@ -497,7 +510,14 @@ static void MouseKeySet()
 static void EmergencyHandler()
 {
     // 遥控器左侧开关为[上]进入急停模式.注意向打时下拨轮是正
+    // 遥控器接收挪到底盘板后,"遥控器失效"包含两种情况:①双板转发链路离线 ②遥控器本身离线(底盘板判定),
+    // 两者都必须触发急停;否则断连时rc数据被清零/冻结而开关判断全部不命中,会既不急停也不响应(RC-1)
+#if defined(RC_RECEIVER_ON_CHASSIS) && defined(GIMBAL_BOARD)
+    if (!CANCommIsOnline(cmd_can_comm) || !chassis_fetch_data.rc.online ||
+        switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
+#else
     if (switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
+#endif
     {
         robot_state = ROBOT_STOP;
         gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
@@ -518,6 +538,28 @@ static void EmergencyHandler()
     }
 }
 
+#if defined(RC_RECEIVER_ON_CHASSIS) && defined(GIMBAL_BOARD)
+/**
+ * @brief 将底盘板转发来的遥控器数据映射为本地RC_ctrl_t镜像
+ * @note  字段与chassis.c中填充RC_Data_s的字段一一对应;
+ *        若扩展了RC_Data_s,需在此同步补齐映射.
+ */
+static void RCForwardToCtrl()
+{
+    rc_remote_ctrl[TEMP].rc.rocker_l_ = chassis_fetch_data.rc.rocker_l_;
+    rc_remote_ctrl[TEMP].rc.rocker_l1 = chassis_fetch_data.rc.rocker_l1;
+    rc_remote_ctrl[TEMP].rc.rocker_r_ = chassis_fetch_data.rc.rocker_r_;
+    rc_remote_ctrl[TEMP].rc.rocker_r1 = chassis_fetch_data.rc.rocker_r1;
+    rc_remote_ctrl[TEMP].rc.dial = chassis_fetch_data.rc.dial;
+    rc_remote_ctrl[TEMP].rc.switch_left = chassis_fetch_data.rc.switch_left;
+    rc_remote_ctrl[TEMP].rc.switch_right = chassis_fetch_data.rc.switch_right;
+    rc_remote_ctrl[TEMP].mouse.x = chassis_fetch_data.rc.mouse_x;
+    rc_remote_ctrl[TEMP].mouse.y = chassis_fetch_data.rc.mouse_y;
+    rc_remote_ctrl[TEMP].key[KEY_PRESS].keys = chassis_fetch_data.rc.key_press;
+    memcpy(rc_remote_ctrl[TEMP].key_count[KEY_PRESS], chassis_fetch_data.rc.key_count, sizeof(chassis_fetch_data.rc.key_count));
+}
+#endif // RC_RECEIVER_ON_CHASSIS
+
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */
 void RobotCMDTask()
 {
@@ -528,6 +570,14 @@ void RobotCMDTask()
 #endif // ONE_BOARD
 #ifdef GIMBAL_BOARD
     chassis_fetch_data = *(Chassis_Upload_Data_s *)CANCommGet(cmd_can_comm);
+#if defined(RC_RECEIVER_ON_CHASSIS)
+    // 更新遥控器镜像: 遥控器数据随底盘板上行帧送达,取用前先判定链路与遥控器是否在线;
+    // 任一离线即清零镜像,避免沿用断连前的开关/摇杆值继续运动(RC-1离线保护,详见EmergencyHandler)
+    if (CANCommIsOnline(cmd_can_comm) && chassis_fetch_data.rc.online)
+        RCForwardToCtrl();
+    else
+        memset(rc_remote_ctrl, 0, sizeof(rc_remote_ctrl));
+#endif // RC_RECEIVER_ON_CHASSIS
 #endif // GIMBAL_BOARD
     SubGetMessage(shoot_feed_sub, &shoot_fetch_data);
     SubGetMessage(gimbal_feed_sub, &gimbal_fetch_data);
