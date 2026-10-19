@@ -22,20 +22,31 @@ static void CANCommResetRx(CANCommInstance *ins)
  * @brief cancomm的接收回调函数
  *
  * @param _instance
+ * @note  帧头重同步(附录A缺陷修复): 只要本帧是"帧头+长度匹配"的包头,无论当前是否正在收包,
+ *        都从这一帧重新开始接收。原实现只在recv_state==0时接受帧头,因此发送端一旦因邮箱满
+ *        丢掉中间某一帧,接收端就会永久停留在半包状态,后续所有包都被当作半包的续帧 →
+ *        链路彻底失效(表现为恒判离线)。重同步后,丢帧最多损失一个周期。
  */
 static void CANCommRxCallback(CANInstance *_instance)
 {
     CANCommInstance *comm = (CANCommInstance *)_instance->id; // 注意写法,将can instance的id强制转换为CANCommInstance*类型
 
-    /* 当前接收状态判断 */
-    if (_instance->rx_buff[0] == CAN_COMM_HEADER && comm->recv_state == 0) // 之前尚未开始接收且此次包里第一个位置是帧头
+    /* 判断本帧是否为包头(帧头+datalen都匹配) */
+    uint8_t is_header = (_instance->rx_len >= 2) &&
+                        (_instance->rx_buff[0] == CAN_COMM_HEADER) &&
+                        (_instance->rx_buff[1] == comm->recv_data_len);
+
+    if (is_header)
     {
-        if (_instance->rx_buff[1] == comm->recv_data_len) // 如果这一包里的datalen也等于我们设定接收长度(这是因为暂时不支持动态包长)
-        {
-            comm->recv_state = 1; // 设置接收状态为1,说明已经开始接收
-        }
-        else
-            return; // 直接跳过即可
+        if (comm->recv_state) // 之前有半包未收完: 丢弃并从这里重新开始
+            comm->resync_cnt++;
+        comm->recv_state = 1;
+        comm->cur_recv_len = 0;
+        memset(comm->raw_recvbuf, 0, comm->recv_buf_len);
+    }
+    else if (comm->recv_state == 0)
+    {
+        return; // 尚未开始接收,且本帧不是包头 → 直接丢弃
     }
 
     if (comm->recv_state) // 已经收到过帧头
@@ -63,7 +74,11 @@ static void CANCommRxCallback(CANInstance *_instance)
                     comm->update_flag = 1;           // 数据更新flag置为1
                     DaemonReload(comm->comm_daemon); // 重载daemon,避免数据更新后一直不被读取而导致数据更新不及时
                 }
+                else
+                    comm->crc_err_cnt++;
             }
+            else
+                comm->tail_err_cnt++;
             CANCommResetRx(comm);
             return; // 重置状态然后返回
         }
@@ -110,22 +125,51 @@ CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)
     return ins;
 }
 
+/* 多帧发送参数(附录A缺陷修复)
+ * 背景: 0x311 = 38+4 = 42B → 6帧, 0x312 = 21+4 = 25B → 4帧, 而bxCAN只有3个发送邮箱;
+ *       原实现一次性连发、邮箱满即丢且调用方忽略返回值 → 接收端永远凑不齐一包(链路恒离线).
+ * 现在: 每帧调用CANTransmitWait等空闲邮箱; 整包设CAN_COMM_TX_BUDGET_MS预算,超预算就作废本包
+ *       (接收端有帧头重同步,半包会被丢弃),下个周期整包重发. 预算限制保证不会长时间阻塞调用任务
+ *       (CANCommSend在200Hz的robot_cmd/ChassisTask里调用,周期5ms).
+ * 实测: 总线空载时6帧≈0.7ms,预算2ms足够. */
+#define CAN_COMM_TX_BUDGET_MS 2.0f
+
 void CANCommSend(CANCommInstance *instance, uint8_t *data)
 {
     static uint8_t crc8;
     static uint8_t send_len;
+    static uint32_t tx_fail_cnt;
+    float budget_start;
+
     // 将data copy到raw_sendbuf中,计算crc8
     memcpy(instance->raw_sendbuf + 2, data, instance->send_data_len);
     crc8 = crc_8(data, instance->send_data_len);
     instance->raw_sendbuf[2 + instance->send_data_len] = crc8;
 
+    budget_start = DWT_GetTimeline_ms();
     // CAN单次发送最大为8字节,如果超过8字节,需要分包发送
     for (size_t i = 0; i < instance->send_buf_len; i += 8)
     { // 如果是最后一包,send len将会小于8,要修改CAN的txconf中的DLC位,调用bsp_can提供的接口即可
+        float budget_left = CAN_COMM_TX_BUDGET_MS - (DWT_GetTimeline_ms() - budget_start);
+        if (budget_left <= 0.0f)
+        { // 预算用尽: 作废整包(已发出的前半包由接收端帧头重同步丢弃),下个周期重发
+            tx_fail_cnt++;
+            if (tx_fail_cnt == 1 || tx_fail_cnt % 200 == 0)
+                LOGWARNING("[can_comm] tx aborted (no tx mailbox in %.1fms). Cnt [%u]",
+                           (double)CAN_COMM_TX_BUDGET_MS, tx_fail_cnt);
+            return;
+        }
         send_len = instance->send_buf_len - i >= 8 ? 8 : instance->send_buf_len - i;
         CANSetDLC(instance->can_ins, send_len);
         memcpy(instance->can_ins->tx_buff, instance->raw_sendbuf + i, send_len);
-        CANTransmit(instance->can_ins, 1);
+        if (!CANTransmitWait(instance->can_ins, budget_left))
+        { // 这一帧没能进邮箱: 整包作废,下个周期重发(不能只丢中间一帧)
+            tx_fail_cnt++;
+            if (tx_fail_cnt == 1 || tx_fail_cnt % 200 == 0)
+                LOGWARNING("[can_comm] tx aborted at frame %u/%u. Cnt [%u]",
+                           (unsigned)(i / 8 + 1), (unsigned)((instance->send_buf_len + 7) / 8), tx_fail_cnt);
+            return;
+        }
     }
 }
 

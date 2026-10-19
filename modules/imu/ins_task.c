@@ -36,6 +36,14 @@
 #define INS_INIT_TIMEOUT_MS 3000u
 static uint8_t IMU_Available = 0; // BMI088是否初始化成功,供INS_Task判断能否读传感器
 
+/* 供其它应用查询"姿态数据是否可信"(static变量外部拿不到).
+ * 用途: gimbal.c 的大yaw世界角保持环 —— IMU不可用时必须让它失效并切到开环兜底,
+ *       否则会拿着恒为0的姿态去闭环(目标虽会对齐到0,但等于没有世界基准). */
+uint8_t INS_IMUIsAvailable(void)
+{
+    return IMU_Available;
+}
+
 static INS_t INS;
 static IMU_Param_t IMU_Param;
 static PIDInstance TempCtrl = {0};
@@ -48,6 +56,7 @@ const float zb[3] = {0, 0, 1};
 static uint32_t INS_DWT_Count = 0;
 static float dt = 0, t = 0;
 static float RefTemp = 40; // 恒温设定温度
+static float last_nan_recover_ms = 0.0f; // 上一次姿态NaN自愈的时刻(限频用)
 
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
 
@@ -83,14 +92,54 @@ static void InitQuaternion(float *init_q4)
     }
     for (uint8_t i = 0; i < 3; ++i)
         acc_init[i] /= 100;
+
+    /* (N1, 2026-10-15) 初始姿态解算的NaN防护:
+     * ① 加速度为0时 Norm3d 除法会得到NaN;
+     * ② 两向量点积可能因浮点误差略大于1, acosf(1.0000001)=NaN;
+     * ③ 加速度与重力平行时叉乘≈0(轴向量无法归一化);
+     * 三者任一发生都会让初始四元数成NaN, 而EKF一旦以NaN起步就永久NaN(现场就是这种故障).
+     * 因此这里逐项检查, 任何异常都退回单位四元数(即"按水平安装"起步), 并由日志暴露. */
+    float acc_norm = Sqrt(acc_init[0] * acc_init[0] + acc_init[1] * acc_init[1] + acc_init[2] * acc_init[2]);
+    if (!(acc_norm > 1e-3f) || !(acc_norm < 1e3f))
+    {
+        LOGERROR("[ins] accel invalid during init (norm=%d), use identity quaternion", (int)(acc_norm * 1000.0f));
+        init_q4[0] = 1.0f;
+        init_q4[1] = init_q4[2] = init_q4[3] = 0.0f;
+        return;
+    }
     Norm3d(acc_init);
+
     // 计算原始加速度矢量和导航系重力加速度矢量的夹角
-    float angle = acosf(Dot3d(acc_init, gravity_norm));
+    float cos_angle = Dot3d(acc_init, gravity_norm);
+    if (!(cos_angle <= 1.0f))
+        cos_angle = 1.0f; // 同时覆盖NaN
+    if (!(cos_angle >= -1.0f))
+        cos_angle = -1.0f;
+    float angle = acosf(cos_angle);
     Cross3d(acc_init, gravity_norm, axis_rot);
+    float axis_norm = Sqrt(axis_rot[0] * axis_rot[0] + axis_rot[1] * axis_rot[1] + axis_rot[2] * axis_rot[2]);
+    if (!(axis_norm > 1e-6f)) // 加速度与重力几乎平行(水平安装): 旋转轴无意义,直接用单位四元数
+    {
+        init_q4[0] = 1.0f;
+        init_q4[1] = init_q4[2] = init_q4[3] = 0.0f;
+        return;
+    }
     Norm3d(axis_rot);
     init_q4[0] = cosf(angle / 2.0f);
     for (uint8_t i = 0; i < 2; ++i)
         init_q4[i + 1] = axis_rot[i] * sinf(angle / 2.0f); // 轴角公式,第三轴为0(没有z轴分量)
+    init_q4[3] = 0.0f;
+
+    for (uint8_t i = 0; i < 4; ++i) // 最后兜底: 任何一项非有限都退回单位四元数
+    {
+        if (!isfinite(init_q4[i]))
+        {
+            LOGERROR("[ins] init quaternion not finite, use identity quaternion");
+            init_q4[0] = 1.0f;
+            init_q4[1] = init_q4[2] = init_q4[3] = 0.0f;
+            return;
+        }
+    }
 }
 
 
@@ -233,6 +282,26 @@ void INS_Task(void)
             INS.MotionAccel_b[i] = (INS.Accel[i] - gravity_b[i]) * dt / (INS.AccelLPF + dt) + INS.MotionAccel_b[i] * INS.AccelLPF / (INS.AccelLPF + dt);
         }
         BodyFrameToEarthFrame(INS.MotionAccel_b, INS.MotionAccel_n, INS.q); // 转换回导航系n
+
+        /* (N1, 2026-10-15 现场定位) 姿态NaN自愈
+         * 现场故障: 云台 Roll/Pitch/Yaw/BigYaw_Feed 全为NaN, 大yaw/pitch的角度环反馈是NaN ⇒
+         * PID输出恒0 ⇒ 电机完全没反应, 且永不恢复(需复位). 根因是预测重力方向反解acos越界.
+         * 这里做两层保护: ①检测到非有限即刻用当前加速度重建滤波器(限频1s, 因为InitQuaternion要读100次
+         * 加速度≈100ms); ②本拍直接返回, 让姿态输出保留上一拍的有限值, 不把NaN扩散到云台/视觉. */
+        if (!isfinite(QEKF_INS.q[0]) || !isfinite(QEKF_INS.q[1]) ||
+            !isfinite(QEKF_INS.q[2]) || !isfinite(QEKF_INS.q[3]) ||
+            !isfinite(QEKF_INS.Yaw) || !isfinite(QEKF_INS.Pitch) || !isfinite(QEKF_INS.Roll))
+        {
+            if (DWT_GetTimeline_ms() - last_nan_recover_ms > 1000.0f)
+            {
+                float q_reinit[4];
+                InitQuaternion(q_reinit);
+                IMU_QuaternionEKF_Reset(q_reinit);
+                last_nan_recover_ms = DWT_GetTimeline_ms();
+                LOGERROR("[ins] attitude NaN detected, EKF re-initialized from accel");
+            }
+            return; // 本拍不更新姿态输出(保留上一拍的有限值)
+        }
 
         INS.Yaw = QEKF_INS.Yaw;
         INS.Pitch = QEKF_INS.Pitch;

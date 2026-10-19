@@ -65,4 +65,15 @@ void CANSetDLC(CANInstance *_instance, uint8_t length);
  */
 uint8_t CANTransmit(CANInstance *_instance,float timeout);
 
+/**
+ * @brief 等待空闲发送邮箱后再发送(阻塞式,供多帧链路如CANComm使用)
+ * @note  与CANTransmit的非阻塞模式不同: 邮箱满时会在timeout_ms内等待,避免多帧包中途丢帧;
+ *        注意会阻塞调用任务,timeout_ms必须远小于任务周期
+ *
+ * @param _instance can instance owned by module
+ * @param timeout_ms 等待空闲邮箱的超时时间,单位ms
+ * @return 1 已交给硬件发送; 0 超时或失败(调用方应作废整包)
+ */
+uint8_t CANTransmitWait(CANInstance *_instance, float timeout_ms);
+
 #endif

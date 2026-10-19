@@ -72,4 +72,10 @@ extern float ChiSquareTestThreshold;
 void IMU_QuaternionEKF_Init(float* init_quaternion,float process_noise1, float process_noise2, float measure_noise, float lambda, float lpf);
 void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, float az, float dt);
 
+/**
+ * @brief 姿态自愈: 用给定初始四元数重建滤波器状态与协方差(不重新分配内存)
+ * @note  用于检测到四元数/姿态出现NaN时的恢复, 见QuaternionEKF.c中的说明(N1)
+ */
+void IMU_QuaternionEKF_Reset(const float *init_quaternion);
+
 #endif

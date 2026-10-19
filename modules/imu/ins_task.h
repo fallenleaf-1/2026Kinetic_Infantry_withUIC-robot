@@ -90,6 +90,12 @@ typedef struct
 attitude_t *INS_Init(void);
 
 /**
+ * @brief 查询BMI088是否初始化成功(姿态数据是否可信)
+ * @return 1=可用, 0=IMU初始化失败(姿态输出保持为0,任何基于姿态的闭环都应失效)
+ */
+uint8_t INS_IMUIsAvailable(void);
+
+/**
  * @brief 此函数放入实时系统中,以1kHz频率运行
  *        p.s. osDelay(1);
  *

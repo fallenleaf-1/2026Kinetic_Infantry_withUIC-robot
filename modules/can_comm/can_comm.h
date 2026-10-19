@@ -40,6 +40,11 @@ typedef struct
     uint8_t cur_recv_len; // 当前已经接收到的数据长度(包括帧头帧尾datalen和校验和)
     uint8_t update_flag;  // 数据更新标志位,当接收到新数据时,会将此标志位置1,调用CANCommGet()后会将此标志位置0
 
+    /* 链路质量观测(附录A缺陷的可观测性): 出现非0说明对端有掉帧/半包,便于现场定位 */
+    uint16_t resync_cnt;  // 收到"新包头时上一包还没收完"的次数(对端掉帧)
+    uint16_t crc_err_cnt; // 整包收齐但crc校验失败次数
+    uint16_t tail_err_cnt;// 整包收齐但帧尾不匹配次数
+
     DaemonInstance* comm_daemon;
 } CANCommInstance;
 #pragma pack()

@@ -37,7 +37,15 @@
  * 25.0f = 满速(660*25 = 16500 = CHASSIS_WHEEL_SPEED_MAX);
  * 首次带电从8.0f(约1/3满速)起步,台架空载确认舵向/轮向后再逐级上调,场测不超过25.0f */
 #define CHASSIS_RC_SPEED_SCALE 8.0f
+#endif
 
+/* 底盘舵轮的"自动回正 + 现场示教标定": 单板直控与双板底盘板都启用
+ * (与遥控器接在哪块板无关: 回正/保持目标是底盘本地行为; 双板时示教手势由云台板转发,见CHASSIS_TEACH_CMD_*) */
+#ifdef CHASSIS_BOARD
+#define CHASSIS_STEER_ALIGN
+#endif
+
+#ifdef CHASSIS_STEER_ALIGN
 /* 上电初始回正 / 静止回正: 把4个舵向电机驱动到标定的正前方(驱动轮始终零输出).
  * - 容差由5°收紧到2°: 原5°容差下角度环"刚进容差即结束",实测四轮停在3~4.5°偏差处,肉眼看就是没回正;
  *   容差不取更小值的原因: 末段收敛受静摩擦限制是"爬行"(实测1.3°→0.6°要好几秒),
@@ -47,17 +55,17 @@
  * - 超时上限兜底"某个舵轮卡住/舵机没反馈"的情况,避免角度环长期堵转带电.
  * 注意: 回正会驱动舵轮转动(最多180°),上电前请确认舵轮能自由转动或整车已架空. */
 #define CHASSIS_ALIGN_TIMEOUT_MS 8000u   // 回正阶段最长持续时间(实测RB受阻力时从18.8°收到<5°需约4.5s,留足余量)
-#define CHASSIS_ALIGN_TOLERANCE_DEG 2.0f // 单轮|目标-实际|小于该值才算该轮对准(交回遥控器的门槛)
+#define CHASSIS_ALIGN_TOLERANCE_DEG 2.0f // 单轮|目标-实际|小于该值才算该轮对准(交回控制的门槛)
 #define CHASSIS_ALIGN_SETTLE_CNT 20u     // 连续满足容差的周期数(200Hz下=100ms)
 
-/* 静止时回到正前方: 摇杆回中/停车后舵轮主动转回标定正前方,而不是保持上次行驶方向.
+/* 静止时回到正前方: 指令回中/停车后舵轮主动转回标定正前方,而不是保持上次行驶方向.
  * 关掉即恢复旧行为"停车保持上个方向"(注意: 旧行为下停车方向可能是"正前方+180°"的等价表示,
  * 车轮实际朝后,视觉上就不是正前方了) */
 #define CHASSIS_STEER_RETURN_ON_STOP
-/* 遥控器离线/急停(零力)时舵轮仍通电稳住正前方,只让4个驱动轮零输出.
+/* 零力/急停(离线)时舵轮仍通电稳住正前方,只让4个驱动轮零输出.
  * 关掉即恢复旧行为"回正后舵机断电,轮子可自由推动(也会歪)" */
 #define CHASSIS_STEER_HOLD_FORWARD
-#endif
+#endif // CHASSIS_STEER_ALIGN
 
 /* 底盘应用包含的模块和信息存储,底盘是单例模式,因此不需要为底盘建立单独的结构体 */
 #ifdef CHASSIS_BOARD // 如果是底盘板,使用板载IMU获取底盘转动角速度
@@ -104,12 +112,13 @@ static float angle_lf, angle_rf, angle_lb, angle_rb;      // 底盘舵机角度�
 // 底盘跟随PID
 static PIDInstance Chassis_Follow_PID;
 
-#ifdef CHASSIS_RC_DIRECT
-/* 单板直控: 现场"示教 + 存Flash"标定
+#ifdef CHASSIS_STEER_ALIGN
+/* 底盘板现场"示教 + 存Flash"标定(单板直控/双板都启用)
  * 背景: 舵轮的正前方标定值(GM6020_*_ANGLE)随装配变化,改一次就要重编译+烧录;
  *       这里提供现场标定: 遥控器左[下]+右[下]保持1.5s进示教模式(四舵轮断电可手摆),
  *       把轮子摆到视觉正前方后,右摇杆前推到底保持1s即把当前四角存进Flash;
  *       以后上电自动优先使用Flash里的值(robot_def.h里的值作为出厂默认).
+ * 双板注意: 底盘板没有遥控器,手势由云台板robot_cmd解析后随0x312的chassis_speed_buff高8位转发过来.
  * 存储: 最后一个空扇区0x080E0000(固件只用到0x08019913,扇区11未被占用);
  *       擦除一个128KB扇区会让CPU停顿1~2s(STM32F4无RWW),本工程未开看门狗,可接受. */
 #include "bsp_flash.h"
@@ -220,23 +229,25 @@ static void SteerCalibRestoreDefault(void)
                (int)(steer_forward_angle[2] * 100.0f), (int)(steer_forward_angle[3] * 100.0f));
 }
 
-/* 示教模式参数(底盘任务200Hz,1tick=5ms) */
+#ifdef CHASSIS_RC_DIRECT
+/* 示教手势参数(单板直控: 底盘板自己接遥控器; 底盘任务200Hz,1tick=5ms) */
 #define STEER_TEACH_ENTER_TICKS 300u  // 左下+右下 保持1.5s进入
 #define STEER_TEACH_SAVE_TICKS 200u   // 右摇杆前推/后拉到底 保持1.0s保存/恢复默认
 #define STEER_TEACH_LOG_TICKS 100u    // 示教中每0.5s打印一次当前四角
-#define STEER_TEACH_STICK_FWD 600     // 右摇杆"推到底"的判定阈值(量纲±660)
-#define STEER_TEACH_STICK_BACK (-600) // 右摇杆"拉到底"
+#define STEER_TEACH_STICK_KEEP 450    // 右摇杆超过该值(量纲±660)开始/继续累计,不必压到机械极限
+#define STEER_TEACH_STICK_RESET 300   // 回到该值以内才算"松手"并清零累计(滞回:抖动/未到底不会打断保持)
 
 static uint8_t steer_teach_on = 0;
 static uint16_t steer_teach_enter_cnt = 0;
 static uint16_t steer_teach_save_cnt = 0;
 static uint16_t steer_teach_log_cnt = 0;
+static int8_t steer_teach_stick_sign = 0; // 示教中右摇杆累计方向: +1前推(保存) -1后拉(恢复) 0未动作
 
 /**
- * @brief 示教模式状态机: 处理进入/保存/退出,并周期打印四轮角度
+ * @brief 本板遥控器的示教手势状态机(仅单板直控用)
  * @note  进入: 左下+右下保持1.5s(遥控器必须在线); 保存: 右摇杆前推到底保持1s;
- *        退出不保存: 左开关[上](急停)或遥控器掉线
- * @return 1 当前处于示教模式(调用者应让8个电机全部零输出并跳过正常控制)
+ *        恢复默认: 右摇杆后拉到底保持1s; 退出不保存: 左开关[上](急停)或遥控器掉线
+ * @return 本周期要执行的命令(CHASSIS_TEACH_CMD_*); 示教期间一直返回ENTER
  */
 static uint8_t RCDirectTeachUpdate(void)
 {
@@ -253,22 +264,25 @@ static uint8_t RCDirectTeachUpdate(void)
                 steer_teach_on = 1;
                 steer_teach_enter_cnt = 0;
                 steer_teach_save_cnt = 0;
+                steer_teach_stick_sign = 0;
                 steer_teach_log_cnt = 0;
                 LOGWARNING("[chassis] steer teach ON: 4 servos unpowered, set wheels to forward, "
                            "right stick FULL FORWARD 1s to SAVE, FULL BACK 1s to RESTORE DEFAULTS, left switch UP to exit");
+                return CHASSIS_TEACH_CMD_ENTER;
             }
         }
         else
             steer_teach_enter_cnt = 0;
-        return 0;
+        return CHASSIS_TEACH_CMD_NONE;
     }
 
     // 遥控器掉线: 直接退出,避免无人看管时长期保持"舵轮无力矩"
     if (!online)
     {
         steer_teach_on = 0;
+        steer_teach_stick_sign = 0;
         LOGWARNING("[chassis] steer teach OFF (rc lost), nothing saved");
-        return 0;
+        return CHASSIS_TEACH_CMD_NONE;
     }
 
     // 退出不保存: 左开关打到[上](与急停同位置)
@@ -276,27 +290,38 @@ static uint8_t RCDirectTeachUpdate(void)
     {
         steer_teach_on = 0;
         steer_teach_save_cnt = 0;
+        steer_teach_stick_sign = 0;
         LOGWARNING("[chassis] steer teach OFF (left switch UP), nothing saved");
-        return 0;
+        return CHASSIS_TEACH_CMD_NONE;
     }
 
-    // 保存: 右摇杆前推到底并保持; 恢复出厂: 右摇杆后拉到底并保持
-    if (rc_data[TEMP].rc.rocker_r1 >= STEER_TEACH_STICK_FWD ||
-        rc_data[TEMP].rc.rocker_r1 <= STEER_TEACH_STICK_BACK)
+    // 保存/恢复: 右摇杆前推到底 / 后拉到底并保持(滞回判定,见 STEER_TEACH_STICK_KEEP/RESET 注释)
+    int8_t stick_sign;
+    if (rc_data[TEMP].rc.rocker_r1 >= STEER_TEACH_STICK_KEEP)
+        stick_sign = 1;
+    else if (rc_data[TEMP].rc.rocker_r1 <= -STEER_TEACH_STICK_KEEP)
+        stick_sign = -1;
+    else if (rc_data[TEMP].rc.rocker_r1 <= STEER_TEACH_STICK_RESET && rc_data[TEMP].rc.rocker_r1 >= -STEER_TEACH_STICK_RESET)
+        stick_sign = 0; // 已松手
+    else
+        stick_sign = steer_teach_stick_sign; // 中间带维持方向(滞回)
+
+    if (stick_sign != 0)
     {
-        if (++steer_teach_save_cnt >= STEER_TEACH_SAVE_TICKS)
+        if (stick_sign != steer_teach_stick_sign)
+            steer_teach_save_cnt = 1; // 换方向重新计数
+        else if (++steer_teach_save_cnt >= STEER_TEACH_SAVE_TICKS)
         {
-            if (rc_data[TEMP].rc.rocker_r1 >= STEER_TEACH_STICK_FWD)
-                SteerCalibSave();
-            else
-                SteerCalibRestoreDefault();
+            uint8_t cmd = (stick_sign > 0) ? CHASSIS_TEACH_CMD_SAVE : CHASSIS_TEACH_CMD_RESTORE;
             steer_teach_on = 0;
             steer_teach_save_cnt = 0;
-            return 0;
+            steer_teach_stick_sign = 0;
+            return cmd;
         }
     }
     else
         steer_teach_save_cnt = 0;
+    steer_teach_stick_sign = stick_sign;
 
     // 周期打印当前四角(便于用RTT核对)
     if (++steer_teach_log_cnt >= STEER_TEACH_LOG_TICKS)
@@ -307,9 +332,34 @@ static uint8_t RCDirectTeachUpdate(void)
                 (int)(servo_lb->measure.angle_single_round * 100.0f), (int)(servo_rb->measure.angle_single_round * 100.0f));
     }
 
-    return 1;
+    return CHASSIS_TEACH_CMD_ENTER;
 }
 #endif // CHASSIS_RC_DIRECT
+
+/**
+ * @brief 本周期底盘应执行的示教标定命令
+ * @note  单板直控: 由本板遥控器手势状态机给出;
+ *        双板: 底盘板没有遥控器,命令由云台板robot_cmd写进Chassis_Ctrl_Cmd_s.chassis_speed_buff的高8位转发
+ *        (链路离线时CANComm分支会把整个命令清零 ⇒ 自动退出示教,安全)
+ */
+static uint8_t SteerTeachCmd(void)
+{
+#ifdef CHASSIS_RC_DIRECT
+    return RCDirectTeachUpdate();
+#else
+    /* 双板: 云台板把 SAVE/RESTORE 保持200ms下发(见 robot_cmd.c SteerTeachCmdUpdate 尾部注释),
+     * 这里做**边沿检测**: 同一保存/恢复命令重复送达只执行第一次, 否则保持期内会反复擦Flash
+     * (每次擦除会让CPU停顿1~2s). ENTER 必须每拍都返回 —— 示教期间要靠它持续保持四舵轮零电流. */
+    static uint8_t last_raw = CHASSIS_TEACH_CMD_NONE;
+    uint8_t raw = (uint8_t)((chassis_cmd_recv.chassis_speed_buff >> CHASSIS_TEACH_CMD_SHIFT) & 0xFF);
+    uint8_t cmd = raw;
+    if ((raw == CHASSIS_TEACH_CMD_SAVE || raw == CHASSIS_TEACH_CMD_RESTORE) && raw == last_raw)
+        cmd = CHASSIS_TEACH_CMD_NONE; // 重复的保存/恢复: 已执行过, 本拍忽略
+    last_raw = raw;
+    return cmd;
+#endif
+}
+#endif // CHASSIS_STEER_ALIGN
 
 void ChassisInit()
 {
@@ -459,6 +509,10 @@ void ChassisInit()
             ;
     }
 #else  // CHASSIS_RC_DIRECT
+#ifdef CHASSIS_STEER_ALIGN
+    // 现场标定: 优先使用Flash里保存过的正前方(示教模式保存),没有则用robot_def.h的默认值
+    SteerCalibLoad();
+#endif
     CANComm_Init_Config_s comm_conf = {
         .can_config = {
             .can_handle = &hcan1,
@@ -723,11 +777,13 @@ static void RCDirectSet()
 }
 #endif // CHASSIS_RC_DIRECT
 
-#ifdef CHASSIS_RC_DIRECT
+#ifdef CHASSIS_STEER_ALIGN
 /* 回正过程中每轮"标定正前方 - 当前角度"的残差(度),供回正结束/超时时打日志诊断 */
 static float align_err[4];
 static uint8_t align_done = 0;    // 上电回正阶段是否已完成(示教模式期间会清零,退出后自动重跑)
+static uint8_t steer_teach_active = 0; // 示教是否处于开启状态(仅用于打进入/退出边沿日志)
 static uint16_t align_ok_cnt = 0; // 连续满足回正容差的周期数
+static float align_start_ms = 0;  // 回正阶段自身的起点(不能用DWT时间轴原点: 双板启动要先做几十秒IMU标定)
 
 /**
  * @brief 让4个舵向电机指向标定的正前方(不做±180°优劣弧翻转,保证视觉上就是正前方)
@@ -776,53 +832,17 @@ static uint8_t RCDirectAlignServos()
     DJIMotorStop(motor_rb);
     return ServosHoldForward();
 }
-#endif // CHASSIS_RC_DIRECT
+#endif // CHASSIS_STEER_ALIGN
 
 /* 机器人底盘控制核心任务 */
 void ChassisTask()
 {
-#ifdef CHASSIS_RC_DIRECT
-    /* 现场示教模式(最高优先级): 左下+右下保持1.5s进入,四舵轮断电便于手摆,
-     * 右摇杆前推到底1s把当前四角存Flash,左[上]退出.示教期间8个电机全部零输出. */
-    if (RCDirectTeachUpdate())
-    {
-        DJIMotorStop(motor_lf);
-        DJIMotorStop(motor_rf);
-        DJIMotorStop(motor_lb);
-        DJIMotorStop(motor_rb);
-        DJIMotorStop(servo_lf); // 舵轮零电流 => 可用手自由摆动
-        DJIMotorStop(servo_rf);
-        DJIMotorStop(servo_lb);
-        DJIMotorStop(servo_rb);
-        align_done = 0; // 退出示教后重新执行一次回正(用(可能是新的)正前方标定)
-        align_ok_cnt = 0;
-        return;
-    }
-
-    /* 上电初始回正(仅一次,示教模式退出后会重跑): 把4个舵轮转到正前方后交回正常流程.
-     * 该阶段会驱动舵轮转动,且此期间不响应摇杆. */
-    if (!align_done)
-    {
-        uint8_t aligned = RCDirectAlignServos();
-        align_ok_cnt = aligned ? (uint16_t)(align_ok_cnt + 1u) : 0u; // 必须连续满足容差,防止过渡过程误判
-        if (align_ok_cnt >= CHASSIS_ALIGN_SETTLE_CNT || DWT_GetTimeline_ms() >= CHASSIS_ALIGN_TIMEOUT_MS)
-        {
-            align_done = 1;
-            if (align_ok_cnt >= CHASSIS_ALIGN_SETTLE_CNT)
-                LOGINFO("[chassis] servo align done, LF/RF/LB/RB x10 = %d %d %d %d",
-                        (int)(servo_lf->measure.angle_single_round * 10.0f), (int)(servo_rf->measure.angle_single_round * 10.0f),
-                        (int)(servo_lb->measure.angle_single_round * 10.0f), (int)(servo_rb->measure.angle_single_round * 10.0f));
-            else // 超时: 可能某个舵轮卡住/舵机无反馈,不阻塞正常控制
-                LOGWARNING("[chassis] servo align timeout(%dms), residual x10 LF/RF/LB/RB = %d %d %d %d",
-                           (int)CHASSIS_ALIGN_TIMEOUT_MS,
-                           (int)(align_err[0] * 10.0f), (int)(align_err[1] * 10.0f),
-                           (int)(align_err[2] * 10.0f), (int)(align_err[3] * 10.0f));
-        }
-        return; // 回正期间不进入正常控制流程
-    }
-#endif // CHASSIS_RC_DIRECT
-
-    // 获取新的控制信息
+    /* ① 指令来源必须在最前面刷新(2026-10-15 现场定位到的死锁)
+     * 双板下 "保存/恢复默认/退出示教" 这些命令本身就是随 chassis_cmd_recv.chassis_speed_buff 送达的
+     * (由云台板转发),而下面的示教分支会提前 return —— 若刷新放在示教分支之后, 底盘一旦收到 ENTER
+     * 进入示教, 就再也读不到任何新命令: SAVE/RESTORE 收不到、退出不了、示教结束后整车也无法驱动,
+     * 只能复位。实测证据: 进入示教后 update_flag 恒为 1(没人调用 CANCommGet)、chassis_cmd_recv 冻结。
+     * 单板直控的指令也在这里生成, 放最前面语义一致。 */
 #ifdef ONE_BOARD
     SubGetMessage(chassis_sub, &chassis_cmd_recv);
 #endif
@@ -840,6 +860,67 @@ void ChassisTask()
         chassis_cmd_recv.chassis_mode = CHASSIS_ZERO_FORCE;
     }
 #endif // CHASSIS_BOARD
+
+#ifdef CHASSIS_STEER_ALIGN
+    /* 现场示教模式(最高优先级): 手势进入后四舵轮断电便于手摆,示教期间8个电机全部零输出.
+     * 单板直控由本板遥控器手势产生命令; 双板由云台板转发(CHASSIS_TEACH_CMD_*). */
+    uint8_t teach_cmd = SteerTeachCmd();
+    if (teach_cmd == CHASSIS_TEACH_CMD_SAVE)
+        SteerCalibSave();
+    else if (teach_cmd == CHASSIS_TEACH_CMD_RESTORE)
+        SteerCalibRestoreDefault();
+    if (teach_cmd == CHASSIS_TEACH_CMD_ENTER)
+    {
+        if (!steer_teach_active) // 只在进入的边沿打印一次(便于现场用RTT确认"底盘确实收到示教命令")
+        {
+            steer_teach_active = 1;
+            LOGWARNING("[chassis] steer teach ON (relayed from gimbal): 4 servos unpowered, set wheels forward then save");
+        }
+        DJIMotorStop(motor_lf);
+        DJIMotorStop(motor_rf);
+        DJIMotorStop(motor_lb);
+        DJIMotorStop(motor_rb);
+        DJIMotorStop(servo_lf); // 舵轮零电流 => 可用手自由摆动
+        DJIMotorStop(servo_rf);
+        DJIMotorStop(servo_lb);
+        DJIMotorStop(servo_rb);
+        align_done = 0; // 退出示教后重新执行一次回正(用(可能是新的)正前方标定)
+        align_ok_cnt = 0;
+        align_start_ms = 0;
+        return;
+    }
+    else if (steer_teach_active) // 示教退出的边沿
+    {
+        steer_teach_active = 0;
+        LOGWARNING("[chassis] steer teach OFF (back to normal control)");
+    }
+
+    /* 上电初始回正(仅一次,示教模式退出后会重跑): 把4个舵轮转到正前方后交回正常流程.
+     * 该阶段会驱动舵轮转动,且此期间不响应速度指令. */
+    if (!align_done)
+    {
+        uint8_t aligned;
+        if (align_start_ms == 0.0f) // 回正窗口从本阶段自身开始计时(见align_start_ms注释)
+            align_start_ms = DWT_GetTimeline_ms();
+        aligned = RCDirectAlignServos();
+        align_ok_cnt = aligned ? (uint16_t)(align_ok_cnt + 1u) : 0u; // 必须连续满足容差,防止过渡过程误判
+        if (align_ok_cnt >= CHASSIS_ALIGN_SETTLE_CNT ||
+            (DWT_GetTimeline_ms() - align_start_ms) >= CHASSIS_ALIGN_TIMEOUT_MS)
+        {
+            align_done = 1;
+            if (align_ok_cnt >= CHASSIS_ALIGN_SETTLE_CNT)
+                LOGINFO("[chassis] servo align done, LF/RF/LB/RB x10 = %d %d %d %d",
+                        (int)(servo_lf->measure.angle_single_round * 10.0f), (int)(servo_rf->measure.angle_single_round * 10.0f),
+                        (int)(servo_lb->measure.angle_single_round * 10.0f), (int)(servo_rb->measure.angle_single_round * 10.0f));
+            else // 超时: 可能某个舵轮卡住/舵机无反馈,不阻塞正常控制
+                LOGWARNING("[chassis] servo align timeout(%dms), residual x10 LF/RF/LB/RB = %d %d %d %d",
+                           (int)CHASSIS_ALIGN_TIMEOUT_MS,
+                           (int)(align_err[0] * 10.0f), (int)(align_err[1] * 10.0f),
+                           (int)(align_err[2] * 10.0f), (int)(align_err[3] * 10.0f));
+        }
+        return; // 回正期间不进入正常控制流程
+    }
+#endif // CHASSIS_STEER_ALIGN
 
 #ifdef CHASSIS_BOARD
 #ifdef RC_RECEIVER_ON_CHASSIS
@@ -861,8 +942,8 @@ void ChassisTask()
 #endif // CHASSIS_BOARD
 
     // SetPowerLimit(referee_data->GameRobotState.chassis_power_limit);//设置功率限制
-#ifdef CHASSIS_RC_DIRECT
-    // steer_forward: 本周期不需要行进(零力/急停,或摇杆回中且不自旋) => 舵轮回到标定正前方
+#ifdef CHASSIS_STEER_ALIGN
+    // steer_forward: 本周期不需要行进(零力/急停,或指令回中且不自旋) => 舵轮回到标定正前方
     uint8_t steer_forward = 0;
 #endif
     if (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE)
@@ -911,9 +992,9 @@ void ChassisTask()
         break;
     }
 
-#ifdef CHASSIS_RC_DIRECT
+#ifdef CHASSIS_STEER_ALIGN
 #ifdef CHASSIS_STEER_RETURN_ON_STOP
-    // 摇杆回中且不自旋 => 车已停下: 舵轮主动转回标定正前方,而不是保持上次行驶方向(与上电回正一致)
+    // 指令回中且不自旋 => 车已停下: 舵轮主动转回标定正前方,而不是保持上次行驶方向(与上电回正一致)
     if (!steer_forward && chassis_cmd_recv.vx == 0.0f && chassis_cmd_recv.vy == 0.0f && chassis_cmd_recv.wz == 0.0f)
         steer_forward = 1;
 #endif
@@ -927,7 +1008,7 @@ void ChassisTask()
         ServosHoldForward();
     }
     else
-#endif // CHASSIS_RC_DIRECT
+#endif // CHASSIS_STEER_ALIGN
     {
     // 根据云台和底盘的角度offset将控制量映射到底盘坐标系上
     // 底盘逆时针旋转为角度正方向;云台命令的方向以云台指向的方向为x,采用右手系(x指向正北时y在正东)

@@ -174,8 +174,39 @@ uint8_t CANTransmit(CANInstance *_instance, float timeout)
 #endif
 }
 
-void CANSetDLC(CANInstance *_instance, uint8_t length)
+/**
+ * @brief 等待空闲发送邮箱后再发送(阻塞式)
+ * @note  背景: bxCAN只有3个发送邮箱,而CANComm的一个包要连发4~6帧;原实现"邮箱满即丢"且调用方
+ *        忽略返回值,导致接收端永远凑不齐一包(见实施记录附录A). 这里改为在timeout_ms内等邮箱.
+ *        总线空载时一帧8字节≈120us,等6帧≈0.7ms,调用方(CANComm)把整包预算限制在2ms内.
+ * @return 1 已交给硬件; 0 超时/失败
+ */
+uint8_t CANTransmitWait(CANInstance *_instance, float timeout_ms)
 {
+    static uint32_t busy_count;
+    float dwt_start = DWT_GetTimeline_ms();
+
+    while (HAL_CAN_GetTxMailboxesFreeLevel(_instance->can_handle) == 0)
+    {
+        if (DWT_GetTimeline_ms() - dwt_start > timeout_ms)
+        { // 限频打印,避免总线拥塞时刷屏
+            busy_count++;
+            if (busy_count == 1 || busy_count % 100 == 0)
+                LOGWARNING("[bsp_can] CAN mailbox busy, frame not sent. Cnt [%u]", busy_count);
+            return 0;
+        }
+    }
+    if (HAL_CAN_AddTxMessage(_instance->can_handle, &_instance->txconf, _instance->tx_buff, &_instance->tx_mailbox) != HAL_OK)
+    {
+        busy_count++;
+        if (busy_count == 1 || busy_count % 100 == 0)
+            LOGWARNING("[bsp_can] CAN add tx message failed. Cnt [%u]", busy_count);
+        return 0;
+    }
+    return 1;
+}
+
+void CANSetDLC(CANInstance *_instance, uint8_t length){
     // 发送长度错误!检查调用参数是否出错,或出现野指针/越界访问
     if (length > 8 || length == 0) // 安全检查,响亮停机避免带错误DLC发送(R5)
     {

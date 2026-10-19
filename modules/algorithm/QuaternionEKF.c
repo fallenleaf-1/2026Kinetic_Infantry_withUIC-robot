@@ -30,6 +30,14 @@ float IMU_QuaternionEKF_P[36] = {100000, 0.1, 0.1, 0.1, 0.1, 0.1,
                                  0.1, 0.1, 0.1, 100000, 0.1, 0.1,
                                  0.1, 0.1, 0.1, 0.1, 100, 0.1,
                                  0.1, 0.1, 0.1, 0.1, 0.1, 100};
+/* 初始协方差的只读副本: 上面的 IMU_QuaternionEKF_P 会被 IMU_QuaternionEKF_Observe() 用实时P覆盖,
+ * 不能再作为初值使用; IMU_QuaternionEKF_Reset() 需要一份永远不变的初值 */
+static const float IMU_QuaternionEKF_P_init[36] = {100000, 0.1, 0.1, 0.1, 0.1, 0.1,
+                                                   0.1, 100000, 0.1, 0.1, 0.1, 0.1,
+                                                   0.1, 0.1, 100000, 0.1, 0.1, 0.1,
+                                                   0.1, 0.1, 0.1, 100000, 0.1, 0.1,
+                                                   0.1, 0.1, 0.1, 0.1, 100, 0.1,
+                                                   0.1, 0.1, 0.1, 0.1, 0.1, 100};
 float IMU_QuaternionEKF_K[18];
 float IMU_QuaternionEKF_H[18];
 
@@ -109,6 +117,9 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
     30     31     32     33     34    35
     */
     QEKF_INS.dt = dt;
+    /* dt异常保护: dt用于F矩阵与加速度低通系数, dt=0/NaN会让F与LPF系数变成NaN/inf(N1同类) */
+    if (!(QEKF_INS.dt > 0.0f) || QEKF_INS.dt > 0.1f)
+        QEKF_INS.dt = 0.001f;
 
     QEKF_INS.Gyro[0] = gx - QEKF_INS.GyroBias[0];
     QEKF_INS.Gyro[1] = gy - QEKF_INS.GyroBias[1];
@@ -350,7 +361,15 @@ static void IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf)
     // 计算预测值和各个轴的方向余弦
     for (uint8_t i = 0; i < 3; ++i)
     {
-        QEKF_INS.OrientationCosine[i] = acosf(fabsf(kf->temp_vector_data[i]));
+        /* (N1, 2026-10-15 现场定位) 预测重力方向由四元数算出, 浮点误差会让其绝对值略大于1,
+         * acosf(1.0000001) = NaN ⇒ OrientationCosine 变 NaN ⇒ 增益K变NaN ⇒ xhat/FilteredValue 永久NaN,
+         * 而P因SkipEq5被跳过仍为有限值(所以"KF结构体里没NaN、镜像量全是NaN").
+         * 后果: 云台 Roll/Pitch/Yaw/BigYaw_Feed 全为NaN ⇒ 大yaw/pitch角度环反馈为NaN ⇒ 电机恒无输出.
+         * 这里夹紧到[0,1]消除越界.(!(c<=1)同时覆盖NaN) */
+        float c = fabsf(kf->temp_vector_data[i]);
+        if (!(c <= 1.0f))
+            c = 1.0f;
+        QEKF_INS.OrientationCosine[i] = acosf(c);
     }
 
     // 利用加速度计数据修正
@@ -479,6 +498,8 @@ static void IMU_QuaternionEKF_Observe(KalmanFilter_t *kf)
  */
 static float invSqrt(float x)
 {
+    if (!(x > 0.0f)) // x=0/负数/NaN: 牛顿迭代会放大成inf或NaN,直接返回0(调用点会得到0而非NaN)
+        return 0.0f;
     float halfx = 0.5f * x;
     float y = x;
     long i = *(long *)&y;
@@ -486,4 +507,52 @@ static float invSqrt(float x)
     y = *(float *)&i;
     y = y * (1.5f - (halfx * y * y));
     return y;
+}
+
+/**
+ * @brief 姿态/状态自愈: 用给定的初始四元数重建滤波器状态(不重新分配内存)
+ * @param init_quaternion 由加速度计解出的初始四元数(调用方保证有限)
+ * @note  为什么需要: 一旦某个环节产生NaN(asinf/acosf越界、invSqrt(0)、矩阵求逆失败等), 四元数会
+ *        永久为NaN且没有任何恢复机制, 云台大yaw/pitch的角度环反馈随之恒为NaN(实测现场故障).
+ *        这里只重写已分配好的状态/协方差缓冲, **不能**再调用 IMU_QuaternionEKF_Init(Kalman_Filter_Init
+ *        每次都 pvPortMalloc, 反复调用会耗尽FreeRTOS堆).
+ */
+void IMU_QuaternionEKF_Reset(const float *init_quaternion)
+{
+    KalmanFilter_t *kf = &QEKF_INS.IMU_QuaternionEKF;
+    uint8_t i;
+
+    for (i = 0; i < kf->xhatSize; ++i)
+        kf->xhat_data[i] = (i < 4) ? init_quaternion[i] : 0.0f; // 四元数用初值, 两轴零偏清0
+    for (i = 0; i < kf->xhatSize; ++i)
+        kf->xhatminus_data[i] = kf->xhat_data[i];
+    for (i = 0; i < kf->xhatSize * kf->xhatSize; ++i)
+    {
+        kf->P_data[i] = IMU_QuaternionEKF_P_init[i];
+        kf->Pminus_data[i] = IMU_QuaternionEKF_P_init[i];
+    }
+    for (i = 0; i < kf->xhatSize; ++i)
+        kf->FilteredValue[i] = kf->xhat_data[i];
+
+    QEKF_INS.ConvergeFlag = 0;
+    QEKF_INS.StableFlag = 0;
+    QEKF_INS.ErrorCount = 0;
+    QEKF_INS.UpdateCount = 0;
+    QEKF_INS.AdaptiveGainScale = 1.0f;
+    QEKF_INS.ChiSquare_Data[0] = 0.0f;
+    for (i = 0; i < 3; ++i)
+    {
+        QEKF_INS.GyroBias[i] = 0.0f;
+        QEKF_INS.Gyro[i] = 0.0f;
+        QEKF_INS.Accel[i] = 0.0f;
+        QEKF_INS.OrientationCosine[i] = 0.0f;
+    }
+    for (i = 0; i < 4; ++i)
+        QEKF_INS.q[i] = init_quaternion[i];
+    QEKF_INS.Roll = 0.0f;
+    QEKF_INS.Pitch = 0.0f;
+    QEKF_INS.Yaw = 0.0f;
+    QEKF_INS.YawTotalAngle = 0.0f;
+    QEKF_INS.YawAngleLast = 0.0f;
+    QEKF_INS.YawRoundCount = 0;
 }

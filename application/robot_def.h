@@ -18,8 +18,8 @@
 
 /* 开发板类型定义,烧录时注意不要弄错对应功能;修改定义后需要重新编译,只能存在一个定义! */
 // #define ONE_BOARD // 单板控制整车
-#define CHASSIS_BOARD //底盘板
-// #define GIMBAL_BOARD  //云台板
+//#define CHASSIS_BOARD //底盘板
+ #define GIMBAL_BOARD  //云台板
 
 /* 单板(仅底盘板)遥控器直控底盘
  * 定义后: 遥控器(DBUS)接在【底盘板】USART3,由底盘板解析并直接解算底盘指令
@@ -30,7 +30,7 @@
  * 注释后: 恢复双板路径(遥控器由云台板接收;或按下方RC_RECEIVER_ON_CHASSIS由底盘板转发).
  * 回退方式: 注释下面一行并重新编译.
  */
-#define CHASSIS_RC_DIRECT
+//#define CHASSIS_RC_DIRECT
 
 /* 遥控器接收位置选择(仅双板有效)
  * 定义后: 遥控器(DBUS)接在【底盘板】USART3,由底盘板解析,并随底盘板上行帧
@@ -60,6 +60,75 @@
 #define SMALL_YAW_MAN_ANGLE 30.0f       // 小YAW最大角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
 #define SMALL_YAW_MIN_ANGLE -30.0f      // 小YAW最小角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
 #define GIMBAL_DEAD_BAND 10        // 云台控制死区,低于该值的遥控器输入将被置为0
+/* 遥控器左摇杆水平 → 大yaw参考角的增量(度/拍; RobotTask 200Hz)
+ * 原值 0.0025 ≈ 满杆 330°/s,现场实测"太快/一推就猛转",降到 0.0009 ≈ 满杆 119°/s。
+ * 需要更快/更慢只改这一个数(两个档位分支都用它)。 */
+#define GIMBAL_YAW_RC_SCALE 0.0009f
+
+/* RobotTask(robot_cmd)的调用频率: osDelay(5) ⇒ 200Hz。
+ * 用于把"每拍的角度增量"换算成"角速度指令(°/s)"发给云台的速度环。 */
+#define ROBOT_TASK_HZ 200.0f
+
+/* 大yaw控制环(云台板; 仅"大yaw用自身编码器反馈"时相关)
+ * 注释(=0, 当前): **速度环** —— 摇杆解出的角速度指令(°/s)直接给速度环。
+ *                 没有位置误差(堵转2s也不会累积几百度的误差)、没有级联的积分饱和,
+ *                 实测的位置环在这套参数下会"堵转→然后满速冲出去",故默认用速度环。
+ * 定义(=1):       位置环(angle→speed 级联, 原设计)。参数 Kp=100/速度Kp=200/角度环 MaxOut=1000RPM
+ *                 (=6000°/s)从未在硬件上验证过, 仅在需要"松手后钉住角度"时再启用并重新整定。 */
+// #define GIMBAL_YAW_POSITION_LOOP
+#define GIMBAL_YAW_SPEED_LIMIT 200.0f // 速度环角速度指令兜底限幅(°/s), 防止任何情况下指令过大
+/* 大yaw 摩擦(库仑/静摩擦)前馈: 直接叠加在速度环输出上的恒定电流量(满量程20000)。
+ * 为什么需要: 该轴静摩擦明显。线性PID只有两条路——输出太小则"压不过死区"(只慢慢爬),
+ * 为压过死区把Kp提得很高则在死区边缘产生极限环(实测 Kp=1000 时 sOut 在 ±20000 每20ms翻转、电机剧烈振荡)。
+ * 加入"按指令方向"的前馈后 P 增益可以取小(稳定), 起步力矩由前馈保证。现场按"能平稳起步且不抖"微调。 */
+#define GIMBAL_YAW_FRICTION_FF 2500.0f
+
+/* 大yaw **世界角(IMU)保持** —— 小陀螺("开着转还能直行/能瞄")的前提条件
+ * 现象(现场): 右开关[上]小陀螺时, 右摇杆推前进 → 车不直行而是画圈.
+ * 根因: 速度环只保证"大yaw相对底盘不转"; 底盘自旋时大yaw被底盘带着一起转 ⇒
+ *       robot_cmd的offset_angle(大yaw相对底盘角, robot_cmd.c:179) 冻结 ⇒
+ *       底盘(chassis.c:1016)拿到的速度指令永远钉在车体系里 ⇒
+ *       "车体系内恒定速度 + 车体自转" = 圆周(半径 v/ω), 数学上必然画圈.
+ *       也就是说: 小陀螺/跟随都要求大yaw是**世界系的稳定基准**(原GIMBAL_GYRO_MODE的本意),
+ *       而"相对底盘锁零"把基准丢了, 跟随模式看不出来(它只需要相对角), 小陀螺必然暴露.
+ * 做法: 摇杆给速率时保持环让位(手感与现在完全一致); 摇杆回中后用P环把IMU世界角拉回
+ *       "松杆那一刻的指向" ⇒ 大yaw在世界系稳住 ⇒ offset_angle随底盘自转连续变化 ⇒
+ *       底盘严格按大yaw朝向直行(左摇杆还能改朝向), 并顺带获得"松杆钉住角度".
+ * 符号: 已用现场日志定死 = **+1** —— yawwatch日志里同一时段 电机spd=+36~+60°/s 而
+ *       IMU YawTotal -6.2→+99.2 同步上升(电机自身编码器327→350→5.7→20.9也同步上升),
+ *       即"速度环正速率 ⇒ BigYaw_Feed 增大" ⇒ 用 +Kp*(target-fb) 才是负反馈.
+ * Kp(量纲1/s): 底盘自旋ω时稳态会有 ω/Kp 的固定偏差(例 ω=150°/s, Kp=8 ⇒ 约19°).
+ *       嫌"瞄的方向偏"就加大Kp(或加外环积分); 出现嗡嗡抖就把Kp减小. 先给小值起步.
+ * 关闭方式: 注释 GIMBAL_YAW_IMU_HOLD 一行重新编译(只影响云台板). */
+#define GIMBAL_YAW_IMU_HOLD
+#define GIMBAL_YAW_HOLD_KP 8.0f        // 世界角误差(°) → 速率指令(°/s) 的比例增益
+#define GIMBAL_YAW_HOLD_LIMIT 150.0f   // 保持环单独贡献的速率上限(°/s), 兜底防跑飞
+#define GIMBAL_YAW_HOLD_STICK_TH 3.0f  // 摇杆速率超过该值(°/s)视为"人在操作" ⇒ 保持环让位
+
+/* 大yaw **小陀螺开环兜底**(IMU不可用时用) —— 保持环的"备胎"
+ * 为什么需要: 保持环靠IMU的姿态(绝对指向). IMU一旦离线/姿态NaN(本项目出现过姿态恒NaN的故障),
+ *            世界基准就没了, 小陀螺会立刻退回"画圈". 这条兜底不需要任何传感器.
+ * 原理: 小陀螺的自转速率是**固定指令**(底盘 wz=25)决定的常数. 让大yaw按这个常数反向转,
+ *       大yaw就近似世界稳定 ⇒ offset_angle照常随自转变化 ⇒ 车仍然能直行(只是方向随转速变化慢慢弧).
+ * 常数怎么来(不用手工标定 —— **在线自学**):
+ *       保持环工作时,"小陀螺 + 松杆"稳态下的保持环输出 = 正好等于需要补偿的自转速率,
+ *       云台每拍把它低通学进 yaw_ff_learned(见 gimbal.c), IMU 一旦失效就用这个学到的值.
+ *       下面这个宏只是**还没学到之前的初值**(按几何估算: 轮速指令 wz×150°... 折合底盘自转≈58°/s)。
+ *       符号/大小若现场发现兜底方向反了(表现为"画得更紧"而不是变直), 用下面的 FORCE 宏就地验证并改符号.
+ * 关闭方式: 注释 GIMBAL_YAW_FF_ON_IMU_LOST 一行(只影响云台板). */
+#define GIMBAL_YAW_FF_ON_IMU_LOST
+#define GIMBAL_YAW_SPIN_FF_RATE 58.0f  // 小陀螺底盘自转速率(°/s); 仅作兜底初值, 运行中会被自学值覆盖
+#define GIMBAL_YAW_FF_LEARN_ALPHA 0.002f // 兜底常数在线自学的低通系数(1kHz ⇒ 时间常数≈0.5s)
+#define GIMBAL_YAW_SPIN_FF_MAX 300.0f    // 自学值的可信上限(°/s), 越界即丢弃(防止学到垃圾)
+// #define GIMBAL_YAW_FF_FORCE         // 强制走开环兜底(关掉保持环) —— 现场标定/验证兜底方向用
+
+/* 大yaw角度环反馈来源(云台板)
+ * 注释(=0, 当前): 用**大yaw电机自身编码器**反馈 —— 指令为相对上电位置的增量角, 不依赖IMU姿态,
+ *                 小yaw未接/IMU异常时也能转, 适合当前"只挂大yaw电机"的调试阶段.
+ * 定义(=1):       用IMU的 BigYaw_Feed(IMU yaw - 小yaw偏置)反馈, 这是设计原意(绝对指向, 供视觉/跟随),
+ *                 需要小yaw电机接好并对齐, 否则反馈带固定偏置(会造成使能瞬间的阶跃).
+ * 两种方式都已具备"使能时把指令基准对齐到当前反馈"的保护, 不会再出现使能瞬间满速冲过去. */
+// #define GIMBAL_YAW_FEEDBACK_IMU
 // 发射参数
 #define ENEMY_COLOR 0  // 敌方颜色：0蓝 1红
 #define ONE_BULLET_DELTA_ANGLE 36    // 发射一发弹丸拨盘转动的距离,由机械设计图纸给出
@@ -247,15 +316,32 @@ typedef struct
 
 } Chassis_Ctrl_Cmd_s;
 
+/* 舵轮"示教标定"命令(双板用): 云台板robot_cmd把遥控器手势解析后写入
+ * Chassis_Ctrl_Cmd_s.chassis_speed_buff 的高8位,随0x312转发给底盘板执行
+ * (低8位保留原语义=拨轮速度档位; 单板直控时底盘板直接读本板遥控器手势,不使用该字段) */
+#define CHASSIS_TEACH_CMD_NONE 0    // 正常
+#define CHASSIS_TEACH_CMD_ENTER 1   // 进入示教: 底盘四舵轮断电,便于用手摆到正前方
+#define CHASSIS_TEACH_CMD_SAVE 2    // 把当前四角存为新正前方并退出示教
+#define CHASSIS_TEACH_CMD_RESTORE 3 // 擦除现场标定,恢复robot_def.h默认值并退出示教
+#define CHASSIS_TEACH_CMD_SHIFT 8
+
 // cmd发布的云台控制数据,由gimbal订阅
 typedef struct
 { // 云台角度控制
     float small_yaw;
     float yaw;
     float pitch;
+    /* 小陀螺自转速率通道(°/s): robot_cmd 只在 CHASSIS_ROTATE 档填值(其余档为0),
+     * 云台板用它做两件事: ① 判断"现在在不在小陀螺"(非0即小陀螺) ② IMU失效时作为开环兜底
+     * 的反向补偿量(见 robot_def.h 的 GIMBAL_YAW_FF_ON_IMU_LOST). 该结构体不过CAN, 可自由使用。 */
     float chassis_rotate_wz;
     float DM_ENABLE_FLAG;
     float pitch_omega_feedforword;
+
+    /* 大yaw速度环用的角速度指令(°/s, 由robot_cmd按摇杆解出, 200Hz刷新)。
+     * 与 yaw(角度指令)并存: 用速度环时云台取本字段, 用位置环时云台取 yaw。
+     * 该结构体只在云台板内部经消息中心传递(不过CAN), 因此可以自由扩展字段。 */
+    float yaw_rate;
 
     gimbal_mode_e gimbal_mode;
 } Gimbal_Ctrl_Cmd_s;

@@ -244,13 +244,17 @@ static void RemoteControlSet()
     if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],小陀螺模式
     {
         chassis_cmd_send.chassis_mode = CHASSIS_ROTATE; // 底盘小陀螺模式
+        /* 小陀螺自转速率通道(见robot_def.h GIMBAL_YAW_FF_ON_IMU_LOST): 云台板用它判断"在不在小陀螺",
+         * 并在IMU姿态失效时作为开环兜底的反向补偿量; 其它档位在 RobotCMDTask 里被清零. */
+        gimbal_cmd_send.chassis_rotate_wz = GIMBAL_YAW_SPIN_FF_RATE;
         gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
 
         // 死区判断
         float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
         // float gimbal_pitch_input = ((float)rc_data[TEMP].rc.rocker_l1 > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l1 < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l1 : 0.0f; // 1竖直方向
         // 系数需要调整
-        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
+        gimbal_cmd_send.yaw -= GIMBAL_YAW_RC_SCALE * gimbal_yaw_input;
+        gimbal_cmd_send.yaw_rate = -GIMBAL_YAW_RC_SCALE * gimbal_yaw_input * ROBOT_TASK_HZ; // 速度环用: °/s
         // gimbal_cmd_send.pitch  += 0.0005f * gimbal_pitch_input;
 
         // 视觉控制
@@ -312,7 +316,8 @@ static void RemoteControlSet()
         // 系数需要调整
         
         gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f;
-        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
+        gimbal_cmd_send.yaw -= GIMBAL_YAW_RC_SCALE * gimbal_yaw_input;
+        gimbal_cmd_send.yaw_rate = -GIMBAL_YAW_RC_SCALE * gimbal_yaw_input * ROBOT_TASK_HZ; // 速度环用: °/s
 
         static float pitch_rc;
         pitch_rc += 0.0005f * gimbal_pitch_input;
@@ -353,7 +358,8 @@ static void RemoteControlSet()
         // 死区判断
         float gimbal_yaw_input = ((float)rc_data[TEMP].rc.rocker_l_ > GIMBAL_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_l_ < -GIMBAL_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_l_ : 0.0f; // _水平方向
         // 系数需要调整
-        gimbal_cmd_send.yaw -= 0.0025f * gimbal_yaw_input;
+        gimbal_cmd_send.yaw -= GIMBAL_YAW_RC_SCALE * gimbal_yaw_input;
+        gimbal_cmd_send.yaw_rate = -GIMBAL_YAW_RC_SCALE * gimbal_yaw_input * ROBOT_TASK_HZ; // 速度环用: °/s
 
         // 视觉控制
         static float pitch_vision_input;
@@ -426,6 +432,7 @@ static void MouseKeySet()
     chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].s * 300 - rc_data[TEMP].key[KEY_PRESS].d * 300;
 
     gimbal_cmd_send.yaw += (float)rc_data[TEMP].mouse.x / 660 * 10; // 系数待测
+    gimbal_cmd_send.yaw_rate = (float)rc_data[TEMP].mouse.x / 660 * 10 * ROBOT_TASK_HZ; // 速度环用: °/s
     gimbal_cmd_send.pitch += (float)rc_data[TEMP].mouse.y / 660 * 10;
     
     switch (rc_data[TEMP].key_count[KEY_PRESS][Key_Z] % 3) // Z键设置弹速
@@ -509,23 +516,37 @@ static void MouseKeySet()
  */
 static void EmergencyHandler()
 {
+    // 只在"进入急停/恢复"的边沿打印: 遥控器离线是常态(开机前/关机后),每周期打印会刷屏
+    static uint8_t estop_reported = 0;
+    uint8_t estop_now;
+
     // 遥控器左侧开关为[上]进入急停模式.注意向打时下拨轮是正
     // 遥控器接收挪到底盘板后,"遥控器失效"包含两种情况:①双板转发链路离线 ②遥控器本身离线(底盘板判定),
     // 两者都必须触发急停;否则断连时rc数据被清零/冻结而开关判断全部不命中,会既不急停也不响应(RC-1)
 #if defined(RC_RECEIVER_ON_CHASSIS) && defined(GIMBAL_BOARD)
-    if (!CANCommIsOnline(cmd_can_comm) || !chassis_fetch_data.rc.online ||
-        switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
+    estop_now = (!CANCommIsOnline(cmd_can_comm) || !chassis_fetch_data.rc.online ||
+                 switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP);
 #else
-    if (switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
+    // 标准双板/单板路径: 本板遥控器离线也必须急停.遥控器掉线时rc_data被清零,
+    // 左右开关判断全部不命中 → RemoteControlSet/MouseKeySet都不会执行 →
+    // chassis_cmd_send会沿用上一帧的vx/vy继续驱动底盘(RC-1同类风险,此处补上)
+    estop_now = (!RemoteControlIsOnline() ||
+                 switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP);
 #endif
+
+    if (estop_now) // 还需添加重要应用和模块离线的判断
     {
+        if (!estop_reported)
+        {
+            LOGERROR("[CMD] emergency stop!");
+            estop_reported = 1;
+        }
         robot_state = ROBOT_STOP;
         gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
         chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
         shoot_cmd_send.shoot_mode = SHOOT_OFF;
         shoot_cmd_send.friction_mode = FRICTION_OFF;
         shoot_cmd_send.load_mode = LOAD_STOP;
-        LOGERROR("[CMD] emergency stop!");
         AlarmSetStatus(robocmd_alarm, ALARM_ON);
     }
     // 遥控器右侧开关为[中],恢复正常运行
@@ -533,10 +554,128 @@ static void EmergencyHandler()
     {
         robot_state = ROBOT_READY;
         shoot_cmd_send.shoot_mode = SHOOT_ON;
-        LOGINFO("[CMD] reinstate, robot ready");
+        if (estop_reported)
+        {
+            LOGINFO("[CMD] reinstate, robot ready");
+            estop_reported = 0;
+        }
         AlarmSetStatus(robocmd_alarm, ALARM_OFF);
     }
 }
+
+#ifdef GIMBAL_BOARD
+/* 舵轮示教标定手势(双板: 遥控器接在云台板)
+ * 进入: 左[中]+右[下]保持1.5s; 保存: 右摇杆前推到底保持1s; 恢复默认: 右摇杆后拉到底保持1s;
+ * 退出不保存: 左开关离开[中](含[上]急停)或遥控器离线. 时间基准 RobotTask 200Hz(1tick=5ms).
+ *
+ * 为何是左[中]而不是左[下]: 左[下]是"遥控器控制"驾驶档,而右[下]是"底盘跟随云台"驾驶档,
+ * 原手势"左下+右下"与一个**正常驾驶状态**完全重叠 —— 用跟随模式开车时只要保持1.5s就会误入
+ * 示教(四舵轮断电可手摆 + 四驱动轮停机), 属于会突然失力的安全隐患.
+ * 左[中]是"键鼠控制"档: 该档下 MouseKeySet() 只读鼠标/键盘, 右开关与右摇杆都不参与驾驶,
+ * 因此该手势与任何驾驶状态都不冲突(手势期间车不可能被驱动).
+ * 同时要求手势"松开过一次"才能再次进入: 保存/恢复后按住不放不会自动重入示教.
+ * 命令写入 chassis_cmd_send.chassis_speed_buff 的高8位,随0x312转发给底盘板执行
+ * (底盘板负责真正的"舵轮断电/写Flash"; 低8位保留拨轮速度档位语义). */
+#define STEER_TEACH_ENTER_TICKS 300u
+#define STEER_TEACH_ACT_TICKS 200u
+#define STEER_TEACH_STICK_KEEP 450  // 右摇杆超过该值(量纲±660)开始/继续累计,不必压到机械极限
+#define STEER_TEACH_STICK_RESET 300 // 回到该值以内才算"松手"并清零累计(滞回:摇杆抖动/未到底不会打断保持)
+#define STEER_TEACH_CMD_HOLD_TICKS 40u // SAVE/RESTORE 的保持拍数(40拍=200ms),见函数尾部注释
+
+static void SteerTeachCmdUpdate(void)
+{
+    static uint8_t teach_on = 0;
+    static uint8_t rearm = 1; // 手势松开过才允许再次进入(防止保存后按住不放自动重入)
+    static int8_t act_sign = 0; // 当前累计方向: +1=前推(保存) -1=后拉(恢复) 0=未动作
+    static uint8_t latch_cmd = CHASSIS_TEACH_CMD_NONE; // 正在保持下发的一次性命令
+    static uint16_t latch_cnt = 0;
+    static uint16_t enter_cnt = 0;
+    static uint16_t act_cnt = 0;
+    uint8_t cmd = CHASSIS_TEACH_CMD_NONE;
+    uint8_t online = RemoteControlIsOnline();
+    uint8_t swl = rc_data[TEMP].rc.switch_left;
+    uint8_t swr = rc_data[TEMP].rc.switch_right;
+    int16_t stick = rc_data[TEMP].rc.rocker_r1;
+    uint8_t gesture = (online && swl == RC_SW_MID && swr == RC_SW_DOWN) ? 1 : 0;
+
+    if (!gesture)
+        rearm = 1; // 手势已松开(或遥控器离线),重新武装
+
+    if (!teach_on)
+    {
+        if (gesture && rearm)
+        {
+            if (++enter_cnt >= STEER_TEACH_ENTER_TICKS)
+            {
+                teach_on = 1;
+                rearm = 0;
+                enter_cnt = 0;
+                act_cnt = 0;
+                LOGWARNING("[cmd] steer teach ON (relayed to chassis): set wheels to forward, "
+                           "right stick FULL FORWARD 1s = SAVE, FULL BACK 1s = RESTORE, "
+                           "left switch out of MID (UP e-stop) = exit");
+            }
+        }
+        else
+            enter_cnt = 0;
+    }
+    else
+    {
+        cmd = CHASSIS_TEACH_CMD_ENTER; // 示教期间持续下发ENTER,底盘保持舵轮无力矩
+        if (!online || swl != RC_SW_MID)
+        {
+            teach_on = 0;
+            act_cnt = 0;
+            act_sign = 0;
+            cmd = CHASSIS_TEACH_CMD_NONE;
+            LOGWARNING("[cmd] steer teach OFF (left switch left MID / rc lost), nothing saved");
+        }
+        else
+        {
+            /* 保存/恢复: 右摇杆前推/后拉到接近极限并保持1.0s.
+             * 用滞回判定(KEEP=450 累计 / RESET=300 才清零): 实测"压到底保持1s"很容易因为摇杆抖动
+             * 或没压到机械极限而中途被清零,原实现(stick>=600 否则立即清零)两次尝试都没能保存成功. */
+            int8_t sign;
+            if (stick >= STEER_TEACH_STICK_KEEP)
+                sign = 1;
+            else if (stick <= -STEER_TEACH_STICK_KEEP)
+                sign = -1;
+            else if (stick <= STEER_TEACH_STICK_RESET && stick >= -STEER_TEACH_STICK_RESET)
+                sign = 0;          // 已松手: 清零累计
+            else
+                sign = act_sign;   // 中间带: 维持上一次方向继续累计(滞回)
+
+            if (sign == 0)
+                act_cnt = 0;
+            else if (sign != act_sign)
+                act_cnt = 1; // 换了方向: 重新计数
+            else if (++act_cnt >= STEER_TEACH_ACT_TICKS)
+            {
+                cmd = (sign > 0) ? CHASSIS_TEACH_CMD_SAVE : CHASSIS_TEACH_CMD_RESTORE;
+                latch_cmd = cmd;                       // 保持200ms下发,防止底盘侧漏掉这一拍
+                latch_cnt = STEER_TEACH_CMD_HOLD_TICKS;
+                teach_on = 0;
+                act_cnt = 0;
+            }
+            act_sign = sign;
+        }
+    }
+
+    /* SAVE/RESTORE 不是持续状态而是一次性动作, 只在命中那一拍有效; 而0x312是200Hz的多帧包,
+     * 底盘任务对包的采样相位与发送相位不对齐时会整包不被读取, 也可能丢帧 —— 实测首次"推杆保存"
+     * 就没到达底盘. 因此把命令保持 STEER_TEACH_CMD_HOLD_TICKS 拍; 底盘侧对这两个命令做边沿检测
+     * (见 chassis.c SteerTeachCmd), 重复送达只执行一次, 不会重复擦写Flash. */
+    if (latch_cnt)
+    {
+        cmd = latch_cmd;
+        if (--latch_cnt == 0)
+            latch_cmd = CHASSIS_TEACH_CMD_NONE;
+    }
+
+    chassis_cmd_send.chassis_speed_buff =
+        (chassis_cmd_send.chassis_speed_buff & 0xFF) | ((int)cmd << CHASSIS_TEACH_CMD_SHIFT);
+}
+#endif // GIMBAL_BOARD
 
 #if defined(RC_RECEIVER_ON_CHASSIS) && defined(GIMBAL_BOARD)
 /**
@@ -585,6 +724,8 @@ void RobotCMDTask()
 
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
+    /* 小陀螺自转速率通道每拍先清零(只有右侧[上]的RemoteControlSet会填值), 否则切档后会残留旧值 */
+    gimbal_cmd_send.chassis_rotate_wz = 0.0f;
     // 根据遥控器左侧开关,确定当前使用的控制模式为遥控器调试还是键鼠
     if (switch_is_down(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[下],遥控器控制
         RemoteControlSet();
@@ -592,6 +733,9 @@ void RobotCMDTask()
         MouseKeySet();
 
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
+#ifdef GIMBAL_BOARD
+    SteerTeachCmdUpdate(); // 舵轮示教手势: 解析后写进chassis_speed_buff高8位,必须在下发CANCommSend之前
+#endif
 
     setVisionSendData_rpy(-gimbal_fetch_data.gimbal_imu_data.Roll / (180.0f / PI),
                           gimbal_fetch_data.gimbal_imu_data.Pitch / (180.0f / PI),
