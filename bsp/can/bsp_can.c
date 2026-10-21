@@ -142,14 +142,18 @@ uint8_t CANTransmit(CANInstance *_instance, float timeout)
     if (HAL_CAN_GetTxMailboxesFreeLevel(_instance->can_handle) == 0)
     { // 无空闲邮箱:立即返回并计数,不做ms级忙等(原实现会阻塞1kHz MotorTask)
         busy_count++;
-        LOGWARNING("[bsp_can] CAN mailbox full! failed to add msg. Cnt [%u]", busy_count);
+        /* 限频: 对端断电/拔线时这一拍每 1ms 都会失败, 逐条打印会把 RTT 刷爆(现场约 800 行/秒),
+         * 反而看不到真正有用的日志. 计数照常累加(判断故障规模用), 只打印第1次和每100次. */
+        if (busy_count == 1 || busy_count % 100 == 0)
+            LOGWARNING("[bsp_can] CAN mailbox full! failed to add msg. Cnt [%u]", busy_count);
         return 0;
     }
     // tx_mailbox会保存实际填入了这一帧消息的邮箱,但是知道是哪个邮箱发的似乎也没啥用
     if (HAL_CAN_AddTxMessage(_instance->can_handle, &_instance->txconf, _instance->tx_buff, &_instance->tx_mailbox) != HAL_OK)
     {
         busy_count++;
-        LOGWARNING("[bsp_can] CAN add tx message failed. Cnt [%u]", busy_count);
+        if (busy_count == 1 || busy_count % 100 == 0)
+            LOGWARNING("[bsp_can] CAN add tx message failed. Cnt [%u]", busy_count);
         return 0;
     }
     return 1; // 发送成功

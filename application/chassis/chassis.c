@@ -986,7 +986,9 @@ void ChassisTask()
         chassis_cmd_recv.wz = PIDCalculate(&Chassis_Follow_PID, chassis_cmd_recv.offset_angle, 0.0f);
         break;
     case CHASSIS_ROTATE: // 自旋,同时保持全向机动;杠杆臂修正后由100缩放为25,实际转速场测微调,后续增加不规则的变速策略
-        chassis_cmd_recv.wz = 25;
+        /* 速率抽成宏(robot_def.h CHASSIS_ROTATE_WZ): 云台板的 GIMBAL_YAW_SPIN_FF_RATE 必须与它对应同一个
+         * 物理自转速率, 写死数字时两处很容易改漏. 取负值即反转自旋方向. */
+        chassis_cmd_recv.wz = CHASSIS_ROTATE_WZ;
         break;
     default:
         break;

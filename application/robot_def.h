@@ -81,7 +81,17 @@
  * 为什么需要: 该轴静摩擦明显。线性PID只有两条路——输出太小则"压不过死区"(只慢慢爬),
  * 为压过死区把Kp提得很高则在死区边缘产生极限环(实测 Kp=1000 时 sOut 在 ±20000 每20ms翻转、电机剧烈振荡)。
  * 加入"按指令方向"的前馈后 P 增益可以取小(稳定), 起步力矩由前馈保证。现场按"能平稳起步且不抖"微调。 */
-#define GIMBAL_YAW_FRICTION_FF 2500.0f
+#define GIMBAL_YAW_FRICTION_FF 1200.0f
+/* 摩擦前馈的滞回阈值(°/s): |指令| 超过 ON 才施加, 低于 OFF 才撤销.
+ * 原实现是单点比较(>3°/s 给 ±2500、否则 0): 指令在阈值附近抖动时前馈在 ±2500 之间来回跳,
+ * 现场表现就是"果冻状往复摆动、很久才静止". 滞回把这一项从"bang-bang"变成"有记忆的开关". */
+#define GIMBAL_YAW_FF_ON  5.0f
+#define GIMBAL_YAW_FF_OFF 2.0f
+/* 前馈"起步脉冲"时长(ms): 越过 FF_ON 的那一下给这么久的恒定电流去顶开静摩擦, 到时自动撤.
+ * 之前是"恒定给到退出门限", 状态粘滞 ⇒ 松杆后前馈继续顶 ⇒ 现场"转完还小范围漂移".
+ * 调大到 200~300 仍旧发抖/发冲, 调小到 80~100 起不来就再加回 GIMBAL_YAW_FRICTION_FF. */
+#define GIMBAL_YAW_FF_PULSE_MS 150.0f
+#define GIMBAL_YAW_FF_PULSE_TICKS ((uint16_t)(GIMBAL_YAW_FF_PULSE_MS * ROBOT_TASK_HZ / 1000.0f))
 
 /* 大yaw **世界角(IMU)保持** —— 小陀螺("开着转还能直行/能瞄")的前提条件
  * 现象(现场): 右开关[上]小陀螺时, 右摇杆推前进 → 车不直行而是画圈.
@@ -101,9 +111,17 @@
  *       嫌"瞄的方向偏"就加大Kp(或加外环积分); 出现嗡嗡抖就把Kp减小. 先给小值起步.
  * 关闭方式: 注释 GIMBAL_YAW_IMU_HOLD 一行重新编译(只影响云台板). */
 #define GIMBAL_YAW_IMU_HOLD
-#define GIMBAL_YAW_HOLD_KP 8.0f        // 世界角误差(°) → 速率指令(°/s) 的比例增益
+#define GIMBAL_YAW_HOLD_KP 10.0f       // 世界角误差(°) → 速率指令(°/s) 的比例增益
+/* 保持环的**符号**: 修正了 IMU 安装方向(INS_MOUNT_Y_DOWN)之后, 世界角的符号可能与旧版相反.
+ * 若进入 GYRO 档松杆时云台自己越转越快/往一边跑(而不是钉住), 把这里改成 -1.0f 重新编译即可。 */
+#define GIMBAL_YAW_HOLD_SIGN 1.0f
 #define GIMBAL_YAW_HOLD_LIMIT 150.0f   // 保持环单独贡献的速率上限(°/s), 兜底防跑飞
-#define GIMBAL_YAW_HOLD_STICK_TH 3.0f  // 摇杆速率超过该值(°/s)视为"人在操作" ⇒ 保持环让位
+#define GIMBAL_YAW_HOLD_STICK_TH 8.0f  // 摇杆速率超过该值(°/s)视为"人在操作" ⇒ 保持环让位
+                                       /* 3.0→8.0: 原值比"死区后的最小有效指令"(1.98°/s)只大一点,
+                                        * 小幅打杆会被保持环整个吃掉(手感"滞后/推了不动"), 一越过阈值又叠加 2500 前馈(猛冲) */
+/* 松杆后轴仍在滑行的判定(°/s): 实测转速高于它就继续刷新保持目标, 避免"追着已经越过头的角度拉回来".
+ * 想让松杆更"钉住"可以调小(但太小会重新出现过冲); 20°/s 对应满杆速率(119°/s)的 1/6. */
+#define GIMBAL_YAW_HOLD_COAST_TH 20.0f
 
 /* 大yaw **小陀螺开环兜底**(IMU不可用时用) —— 保持环的"备胎"
  * 为什么需要: 保持环靠IMU的姿态(绝对指向). IMU一旦离线/姿态NaN(本项目出现过姿态恒NaN的故障),
@@ -129,6 +147,27 @@
  *                 需要小yaw电机接好并对齐, 否则反馈带固定偏置(会造成使能瞬间的阶跃).
  * 两种方式都已具备"使能时把指令基准对齐到当前反馈"的保护, 不会再出现使能瞬间满速冲过去. */
 // #define GIMBAL_YAW_FEEDBACK_IMU
+
+/* ---------------- pitch(DM4310) 控制参数 ----------------
+ * 云台板现装在小yaw 转台上: 它随大yaw+小yaw 转, 但**不随 pitch 关节转** ⇒
+ * IMU 的 Pitch 不是枪管俯仰角, 拿它闭环等于在追"转台点头+振动" ⇒ 必须改用电机编码器反馈.
+ * 用编码器时量纲: 角度 = measure.total_angle(deg), 速度 = measure.velocity×57.3(deg/s),
+ * 与 gimbal_cmd_recv.pitch(deg) 一致, 串级环才是同一个量纲. */
+#define GIMBAL_PITCH_FEEDBACK_MOTOR
+/* 重力前馈: 稳态力矩交给它, 角度环不再用积分(Ki)去"攒"重力 ⇒ 消除 windup 与死区极限环 */
+#define GIMBAL_PITCH_GRAVITY_FF
+#define GIMBAL_PITCH_GRAVITY_A 1.5f   // 枪管水平时的重力矩(N·m); 现场从 1.0 起、±0.5 调
+#define GIMBAL_PITCH_GRAVITY_DIR 1    // 重力矩方向: +1 或 -1(装反了改这里)
+#define GIMBAL_PITCH_ZERO_DEG 0.0f    // 编码器角为 0 时枪管的姿态(约定上电时枪管水平 ⇒ 0)
+#define GIMBAL_PITCH_CMD_SLEW 90.0f   // 指令斜率(°/s): 防止 -30° 阶跃直接砸下去
+#define GIMBAL_PITCH_RATE_LIMIT 120.0f // 角度环输出(速率指令)上限(°/s)
+
+/* ---------------- 小yaw 指令整形 ----------------
+ * 目标下发的是"绝对编码器角-360"(如 -62.8°), 而反馈是 measure.total_angle(上电相对角):
+ * 两者语义不一致时误差可达几十~350°, 配合角度环 MaxOut=500°/s 就是"甩头撞限位".
+ * 这里: ①使能瞬间把指令对齐当前反馈 ②限位 ③限速. */
+#define GIMBAL_SMALL_YAW_CMD_SLEW 120.0f   // 指令斜率(°/s)
+#define GIMBAL_SMALL_YAW_RATE_LIMIT 150.0f // 角度环输出(速率指令)上限(°/s)
 // 发射参数
 #define ENEMY_COLOR 0  // 敌方颜色：0蓝 1红
 #define ONE_BULLET_DELTA_ANGLE 36    // 发射一发弹丸拨盘转动的距离,由机械设计图纸给出
@@ -146,6 +185,12 @@
 #define WHEEL_PERIMETER (2 * PI * RADIUS_WHEEL) // 轮子周长
 #define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
 #define CHASSIS_DEAD_BAND 10   // 底盘速度死区,低于该值的速度指令将被置为0
+/* 遥控摇杆 → 地盘速度的系数(三档统一).
+ * 原来小陀螺档是 5.0f(另两档 25.0f), 前进速度只有 1/5, 现场看起来像"推不动/不直行". */
+#define CHASSIS_VXY_SCALE 25.0f
+/* 小陀螺(ROTATE)档的底盘自旋速率指令. 改这里必须同步改 GIMBAL_YAW_SPIN_FF_RATE,
+ * 后者是"IMU失效时反向补偿的初值", 单位是 °/s, 二者物理上对应同一个自转速率. */
+#define CHASSIS_ROTATE_WZ 25
 //四个驱动电机朝向前方时 转向电机初始编码值
 #define GM6020_LF_ANGLE 133.40f		//装上去的时候Y轴正向对应的角度(2026-10-14现场手摆正前方后重标,旧值192.69)
 #define GM6020_RF_ANGLE 223.93f     //旧值226.36
@@ -156,6 +201,14 @@
 #define GYRO2GIMBAL_DIR_YAW 1   // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
 #define GYRO2GIMBAL_DIR_PITCH 1 // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反
 #define GYRO2GIMBAL_DIR_ROLL 1  // 陀螺仪数据相较于云台的roll的方向,1为相同,-1为相反
+
+/* IMU(C板)安装方向修正(见 ins_task.c INS_Task 里的轴映射):
+ * 实测 2026-10-20 加速度计为 (0.78, 9.71, 0.39) ⇒ 重力在 +Y, 说明板子是**立着**装的,
+ * 而 EKF 假设 Z 轴朝上 ⇒ Pitch 恒≈90°(万向节死锁), YawTotalAngle 退化 ⇒
+ * 大yaw 的"世界角保持"拿着假世界角在拉(现场: 转完松手后还漂).
+ * 定义时把传感器系换成机体系(x_b=z_s, y_b=-x_s, z_b=-y_s).
+ * 板子改为平放(Z 上)后: 注释掉这一行并重新编译。 */
+#define INS_MOUNT_Y_DOWN
 
 // 检查是否出现主控板定义冲突,只允许一个开发板定义存在,否则编译会自动报错
 #if (defined(ONE_BOARD) && defined(CHASSIS_BOARD)) || \

@@ -160,7 +160,7 @@ void RobotCMDInit()
 #endif // GIMBAL_BOARD
 
     gimbal_cmd_send.pitch = 0.0f;
-    gimbal_cmd_send.small_yaw = YAW_ALIGN_ANGLE -360.0f;
+    gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f; // 原来误用 YAW_ALIGN_ANGLE(-138.5°)
 
     robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
     AlarmInit();
@@ -291,8 +291,8 @@ static void RemoteControlSet()
         gimbal_cmd_send.pitch = pitch_vision_input;
         gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f - small_yaw_vision_input;// 确保输入为0时小yaw大yaw对齐朝前
         
-        chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * 5.0f : 0.0f; // _水平方向
-        chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * 5.0f : 0.0f; // 1竖直方向
+        chassis_cmd_send.vx = ((float)rc_data[TEMP].rc.rocker_r_ > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r_ < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r_ * CHASSIS_VXY_SCALE : 0.0f; // _水平方向
+        chassis_cmd_send.vy = ((float)rc_data[TEMP].rc.rocker_r1 > CHASSIS_DEAD_BAND || (float)rc_data[TEMP].rc.rocker_r1 < -CHASSIS_DEAD_BAND) ? (float)rc_data[TEMP].rc.rocker_r1 * CHASSIS_VXY_SCALE : 0.0f; // 1竖直方向
 
         // if((float)rc_data[TEMP].rc.rocker_r_ > 500)
         // {
@@ -428,12 +428,24 @@ static void MouseKeySet()
 {
     shoot_cmd_send.shoot_mode = SHOOT_OFF;
 
+    /* 键鼠档必须显式设置云台/底盘模式: 原实现只写控制量, 模式沿用上一档(急停会把 gimbal_mode
+     * 写成 ZERO_FORCE) ⇒ 切到左[中]后云台一直没力, 必须再切回左[下]才能恢复. */
+    gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+    gimbal_cmd_send.small_yaw = SMALL_YAW_ALIGN_ANGLE - 360.0f; // 与遥控档一致: 小yaw保持对齐位
+    chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;          // 键鼠平移, 底盘不跟随
+
     chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
     chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].s * 300 - rc_data[TEMP].key[KEY_PRESS].d * 300;
 
     gimbal_cmd_send.yaw += (float)rc_data[TEMP].mouse.x / 660 * 10; // 系数待测
     gimbal_cmd_send.yaw_rate = (float)rc_data[TEMP].mouse.x / 660 * 10 * ROBOT_TASK_HZ; // 速度环用: °/s
     gimbal_cmd_send.pitch += (float)rc_data[TEMP].mouse.y / 660 * 10;
+    /* 累加必须限幅: 没有视觉时鼠标一动就会把 pitch 命令累积到几百上千度,
+     * pitch 角度环永远处在饱和区(表现: 一动鼠标枪管就冲到极限然后卡住). */
+    if (gimbal_cmd_send.pitch > PITCH_MAX_ANGLE)
+        gimbal_cmd_send.pitch = PITCH_MAX_ANGLE;
+    else if (gimbal_cmd_send.pitch < PITCH_MIN_ANGLE)
+        gimbal_cmd_send.pitch = PITCH_MIN_ANGLE;
     
     switch (rc_data[TEMP].key_count[KEY_PRESS][Key_Z] % 3) // Z键设置弹速
     {
@@ -519,20 +531,19 @@ static void EmergencyHandler()
     // 只在"进入急停/恢复"的边沿打印: 遥控器离线是常态(开机前/关机后),每周期打印会刷屏
     static uint8_t estop_reported = 0;
     uint8_t estop_now;
+    uint8_t rc_ok; // 遥控器(或其转发链路)是否可用
 
-    // 遥控器左侧开关为[上]进入急停模式.注意向打时下拨轮是正
-    // 遥控器接收挪到底盘板后,"遥控器失效"包含两种情况:①双板转发链路离线 ②遥控器本身离线(底盘板判定),
-    // 两者都必须触发急停;否则断连时rc数据被清零/冻结而开关判断全部不命中,会既不急停也不响应(RC-1)
 #if defined(RC_RECEIVER_ON_CHASSIS) && defined(GIMBAL_BOARD)
-    estop_now = (!CANCommIsOnline(cmd_can_comm) || !chassis_fetch_data.rc.online ||
-                 switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP);
+    rc_ok = (uint8_t)(CANCommIsOnline(cmd_can_comm) && chassis_fetch_data.rc.online);
 #else
-    // 标准双板/单板路径: 本板遥控器离线也必须急停.遥控器掉线时rc_data被清零,
-    // 左右开关判断全部不命中 → RemoteControlSet/MouseKeySet都不会执行 →
-    // chassis_cmd_send会沿用上一帧的vx/vy继续驱动底盘(RC-1同类风险,此处补上)
-    estop_now = (!RemoteControlIsOnline() ||
-                 switch_is_up(rc_data[TEMP].rc.switch_left) || robot_state == ROBOT_STOP);
+    rc_ok = RemoteControlIsOnline();
 #endif
+
+    /* 急停条件: 遥控器/转发链路离线, 或左开关[上].
+     * @note 不要再把 robot_state==ROBOT_STOP 写进急停条件: 那会让急停**自我锁存** ——
+     *       一旦因甩头/瞬断/掉电进入 STOP, 后续每一拍都因为"已在STOP"而继续急停,
+     *       而恢复又只在左[中]执行 ⇒ 现场表现"甩头之后云台彻底没力, 左[下] 怎么拨都起不来". */
+    estop_now = (uint8_t)(!rc_ok || switch_is_up(rc_data[TEMP].rc.switch_left));
 
     if (estop_now) // 还需添加重要应用和模块离线的判断
     {
@@ -549,15 +560,13 @@ static void EmergencyHandler()
         shoot_cmd_send.load_mode = LOAD_STOP;
         AlarmSetStatus(robocmd_alarm, ALARM_ON);
     }
-    // 遥控器右侧开关为[中],恢复正常运行
-    if (switch_is_mid(rc_data[TEMP].rc.switch_left))
+    else // 遥控器在线且左开关不在[上] ⇒ 立即恢复(任意非[上]档都能起来, 不再必须经过[中])
     {
-        robot_state = ROBOT_READY;
-        shoot_cmd_send.shoot_mode = SHOOT_ON;
-        if (estop_reported)
+        if (robot_state == ROBOT_STOP || estop_reported)
         {
-            LOGINFO("[CMD] reinstate, robot ready");
+            robot_state = ROBOT_READY;
             estop_reported = 0;
+            LOGINFO("[CMD] reinstate, robot ready");
         }
         AlarmSetStatus(robocmd_alarm, ALARM_OFF);
     }

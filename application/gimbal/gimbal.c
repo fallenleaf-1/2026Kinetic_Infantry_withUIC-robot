@@ -20,7 +20,8 @@ static Subscriber_t *gimbal_sub;                  // cmd控制消息订阅者
 static Gimbal_Upload_Data_s gimbal_feedback_data; // 回传给cmd的云台状态信息
 static Gimbal_Ctrl_Cmd_s gimbal_cmd_recv;         // 来自cmd的控制信息
 
-static bool gimbal_SmallYaw_Init_Flag = false; // 小YAW电机初始化标志
+/* 小YAW 初始化标志已废弃: 原实现用它做"等小yaw对齐再使能大yaw", 但判据是恒真式且大yaw并不依赖
+ * 小yaw(大yaw 用自身编码器做速度环). 现在小yaw 的进入条件改为"有反馈 + 使能对齐"(见GIMBAL_GYRO_MODE).*/
 /* 大yaw指令基准对齐(见GIMBAL_GYRO_MODE分支): 停机期间摇杆仍会累积指令,使能瞬间必须把基准
  * 挪到当前反馈,否则会出现几十~几百度的阶跃误差 ⇒ 电机满速冲过去(现场"一切到左下就疯狂旋转") */
 static uint8_t yaw_ref_valid = 0;
@@ -30,6 +31,25 @@ static float yaw_ref_bias = 0.0f;
 /* 大yaw摩擦(库仑/静摩擦)前馈: 由速度环分支每拍按指令方向更新, 通过 current_feedforward_ptr
  * 直接叠加在速度环输出上(与PID增益无关) ⇒ 既能压过静摩擦死区, 又不必把Kp提到自激的程度 */
 static float yaw_current_ff = 0.0f;
+static float yaw_spd_ref_log = 0.0f; // 仅用于 1Hz 观测日志
+static float gimbal_log_ms = 0.0f;   // 观测日志限频
+/* 摩擦前馈的"起步脉冲"状态: 只在指令越过 FF_ON 的那一下点火, 脉冲结束即撤(不留稳态推力) */
+static int8_t yaw_ff_dir = 0;
+static uint16_t yaw_ff_cnt = 0;
+static uint8_t yaw_ff_armed = 1;
+
+/* 小yaw 指令整形状态: 使能瞬间把指令基准对齐到当前反馈(与大yaw 的 yaw_ref_valid 同一套路),
+ * 否则"绝对编码器角语义的指令"会被拿去和"上电相对角"的反馈比较, 误差可达几百度量级 ⇒ 甩头 */
+static uint8_t small_yaw_ref_valid = 0;
+static float small_yaw_ref_bias = 0.0f;
+static float small_yaw_cmd_limited = 0.0f;
+static float small_yaw_zero_deg = 0.0f;   // 使能时的小yaw 位置(行程限位的基准)
+static float small_yaw_warn_ms = 0.0f;    // 掉线告警限频
+
+/* pitch 指令整形状态: 使能瞬间对齐 + 斜率限制(避免 -30° 阶跃直接砸到电机上) */
+static uint8_t pitch_ref_valid = 0;
+static float pitch_cmd_limited = 0.0f;
+static float pitch_zero_deg = 0.0f; // 上电时 pitch 编码器角(约定此时枪管水平)
 
 #ifdef GIMBAL_YAW_IMU_HOLD
 /* 大yaw世界角(IMU)保持 —— 详见 robot_def.h 中 GIMBAL_YAW_IMU_HOLD 的说明.
@@ -87,8 +107,8 @@ void GimbalInit()
                  *   ① 参考要用 yaw_rate(°/s) 直接给, 不能除以6;
                  *   ② 增益必须按 °/s 量纲取 —— 底盘板同型号电机用 Kp=10, 之前我按RPM量纲取300(相当于30倍)必然自激.
                  * Kd=0: 转速反馈有量化与~1ms延迟, 微分易放大成振动。 */
-                .Kp = 10,
-                .Ki = 0.5,
+                .Kp = 16, // 10→16: 现场反馈"希望硬一点"(松杆后跟得更紧/抗扰更硬); 若出现嗡嗡抖, 退回 12
+                .Ki = 0.15, // 0→0.15: 消掉稳态速度误差(纯P在低速段需要靠误差维持电流 ⇒ 手感软、易爬行)
                 .Kd = 0,
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
                 .IntegralLimit = 3000,
@@ -129,19 +149,19 @@ void GimbalInit()
             .Kp = 60, // 60
             .Ki = 0,
             .Kd = 0,
-            .DeadBand = 0.1,
+            .DeadBand = 0, // 0.1→0: 死区内 Output 会被清 0, 有负载时表现为间歇抖动
             .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
             .IntegralLimit = 100,
 
-            .MaxOut = 500,
+            .MaxOut = GIMBAL_SMALL_YAW_RATE_LIMIT, // 500→150: 角度环输出是"速率指令"(°/s), 500°/s 会甩头
         },
         .speed_PID = {
             .Kp = 50,  // 50
-            .Ki = 150, // 150
+            .Ki = 20,  // 150→20: 撞限位时积分饱和会把堵转电流攒满, 脱开瞬间猛冲
             .Kd = 0,
             .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
             .IntegralLimit = 3000,
-            .MaxOut = 20000,
+            .MaxOut = 8000, // 20000→8000: 先保守, 确认不撞限位后再放开
         },
         .other_angle_feedback_ptr = &gimba_IMU_data->YawTotalAngle,
         // 还需要增加角速度额外反馈指针,注意方向,ins_task.md中有c板的bodyframe坐标系说明
@@ -164,33 +184,46 @@ void GimbalInit()
             .rx_id = 0x14,
         },
         .controller_setting_init_config = {
-            .angle_feedback_source = OTHER_FEED, // 使用IMU作为角度反馈
+#ifdef GIMBAL_PITCH_FEEDBACK_MOTOR
+            /* 云台板装在小yaw 转台上 ⇒ IMU 不随 pitch 关节转, 必须用电机自身编码器.
+             * 驱动层会把 MOTOR_FEED 的角度取 measure.total_angle(deg)、速度取 velocity(rad/s)→deg/s,
+             * 与 gimbal_cmd_recv.pitch(deg)/角度环输出(deg/s) 同量纲. */
+            .angle_feedback_source = MOTOR_FEED,
+            .speed_feedback_source = MOTOR_FEED,
+#else
+            .angle_feedback_source = OTHER_FEED, // 仅当板子装在随 pitch 转的部件上才可用
             .speed_feedback_source = OTHER_FEED,
+#endif
             .outer_loop_type = ANGLE_LOOP,
             .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
-            // .outer_loop_type = SPEED_LOOP,
-            // .close_loop_type = SPEED_LOOP,
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
+            /* 换反馈源后这个符号必须重新确认(只翻最终力矩, 两级环共用):
+             * 手转枪管上行看 total_angle 是否增大 → 开环给 +1.5N·m 看实际转向 → 两步同向才可闭环. */
             .feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE,
         },
         .controller_param_init_config = {
             .DM_MIT_Kp = 0,
-            .DM_MIT_Kd = 0.1,
+            .DM_MIT_Kd = 0.1, // 电机自带的速度阻尼(N·m/(rad/s)), 先靠它压高频
             .angle_PID = {
-                .Kp = 25,//0.31
-                .Ki = 50,//1
-                .Kd = 0.01,//0.001
-                .MaxOut = 1000,
+                /* 角度环: 输入/输出都是 deg → deg/s, MaxOut 当**速率上限**用(不再是 1000 这种无意义的数).
+                 * Ki=0: 稳态重力矩交给 GIMBAL_PITCH_GRAVITY_FF, 不再用积分去"攒"(原 Ki=50/限幅1e5 会把
+                 * 堵转/重力攒成 windup, 配合死区清输出就是现场的"上下持续抖动"). */
+                .Kp = 25,
+                .Ki = 0,
+                .Kd = 0.01,
+                .MaxOut = GIMBAL_PITCH_RATE_LIMIT,
                 .CoefA = 0.3,
                 .CoefB = 0.2,
-                .IntegralLimit = 100000,
-                .Improve = PID_Trapezoid_Intergral | PID_ChangingIntegrationRate | PID_Integral_Limit,
+                .IntegralLimit = 100,
+                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement | PID_DerivativeFilter,
             },
             .speed_PID = {
-                .Kp = 0.13,//0.12
-                .Ki = 0,//0
-                .Kd = 0.003,//0.01
-                .MaxOut = 100,//53
+                /* 速度环: deg/s → N·m. 原 Kp=0.13 是按 rad/s 反馈凑出来的等效增益,
+                 * 换成 deg/s 反馈后必须同步放大(57.3×) ⇒ 1.5 左右; MaxOut 收紧到真实可用力矩. */
+                .Kp = 1.5,
+                .Ki = 0,
+                .Kd = 0,
+                .MaxOut = 8, // N·m: 不要用 DM_T_MAX(±54)当力矩上限, 那是线协议量程
             },
             .other_angle_feedback_ptr = &gimba_IMU_data->Pitch,
             .other_speed_feedback_ptr = &gimba_IMU_data->Gyro[1],
@@ -224,9 +257,24 @@ void GimbalTask()
         DJIMotorStop(yaw_motor);
         DJIMotorStop(small_yaw_motor);
         DMMotorStop(pitch_motor);
-        gimbal_SmallYaw_Init_Flag = false;
+        DMMotorSetCurrentFeedForward(pitch_motor, 0.0f); // 清掉重力前馈, 避免停机还挂着力矩
+        /* 停机时复位三个环的计算区(只清 Iout/Dout/Err 等, 不动 Kp/Ki 配置):
+         * 否则从急停/掉线恢复时会带着旧积分与旧微分冲一下, 现场表现为"一切档云台先猛甩一下". */
+        PIDReset(&yaw_motor->motor_controller.speed_PID);
+        PIDReset(&small_yaw_motor->motor_controller.angle_PID);
+        PIDReset(&small_yaw_motor->motor_controller.speed_PID);
+        PIDReset(&pitch_motor->angle_PID);
+        PIDReset(&pitch_motor->speed_PID);
         yaw_ref_valid = 0;   // 停机: 下次使能时重新把指令基准对齐到当前反馈
         yaw_current_ff = 0.0f; // 停机时清掉摩擦前馈
+        yaw_ff_cnt = 0;
+        yaw_ff_dir = 0;
+        yaw_ff_armed = 1;
+        small_yaw_ref_valid = 0; // 下次使能重新对齐小yaw 指令基准
+        pitch_ref_valid = 0;     // 下次使能重新对齐 pitch 指令基准
+        /* 停机期间让"观测日志"里的 ref 跟着 fb 走, 避免看到 ref=0 误以为环在出力 */
+        small_yaw_cmd_limited = small_yaw_motor->measure.total_angle;
+        pitch_cmd_limited = pitch_motor->measure.total_angle;
 #ifdef GIMBAL_YAW_IMU_HOLD
         yaw_hold_valid = 0;    // 停机: 下次使能时把世界角保持目标重新对齐到当前指向
 #endif
@@ -236,17 +284,64 @@ void GimbalTask()
         break;
     // 使用陀螺仪的反馈,底盘根据yaw电机的offset跟随云台或视觉模式采用
     case GIMBAL_GYRO_MODE:
-        if(gimbal_SmallYaw_Init_Flag == false)  // 先初始化小yaw，再初始化大yaw
+        /* ===================== 小yaw =====================
+         * 原实现的三处问题(现场已复现):
+         *  ① "等小yaw对齐再使能大yaw"的判据 `ecd < A+5 || ecd > A-5` 是**恒真式**(任何值都成立),
+         *     保护形同虚设;
+         *  ② 没有使能对齐/软件限位/速率限制, 而指令是"绝对编码器角-360"语义、反馈却是
+         *     measure.total_angle(上电相对角) ⇒ 误差可达几十~350°, 角度环 MaxOut=500°/s 直接满速
+         *     甩到机械限位, 堵转大电流 ⇒ 掉电/电调保护 ⇒ 现场"甩头后卡死";
+         *  ③ 掉线时仍拿陈旧反馈闭环。
+         * 现在: 有反馈才进闭环 + 使能对齐 + ±SMALL_YAW_MAN_ANGLE 限位 + 斜率限制。
+         * 注: 大yaw 不再等小yaw"对齐"——大yaw 用自身编码器做速度环, 不依赖小yaw。 */
+        if (DaemonIsOnline(small_yaw_motor->daemon))
         {
             DJIMotorEnable(small_yaw_motor);
-            if(small_yaw_motor->measure.ecd < SMALL_YAW_FORWORD_ALIGN_ECD + 5 || small_yaw_motor->measure.ecd > SMALL_YAW_FORWORD_ALIGN_ECD - 5)
+            DJIMotorChangeFeed(small_yaw_motor, ANGLE_LOOP, MOTOR_FEED);
+            DJIMotorChangeFeed(small_yaw_motor, SPEED_LOOP, MOTOR_FEED);
+            float sy_fb = small_yaw_motor->measure.total_angle; // 上电相对角(deg)
+            if (!small_yaw_ref_valid) // 使能瞬间: 指令=当前反馈 ⇒ 不出力, 无阶跃
             {
-                gimbal_SmallYaw_Init_Flag = true; // 标志位置位,只初始化一次 
+                small_yaw_zero_deg = sy_fb;
+                small_yaw_ref_bias = sy_fb - gimbal_cmd_recv.small_yaw;
+                small_yaw_cmd_limited = sy_fb;
+                small_yaw_ref_valid = 1;
+                LOGINFO("[gimbal] small yaw ref aligned: cmd=%d mdeg, feedback=%d mdeg, bias=%d mdeg",
+                        (int)(gimbal_cmd_recv.small_yaw * 1000.0f), (int)(sy_fb * 1000.0f),
+                        (int)(small_yaw_ref_bias * 1000.0f));
+            }
+            float sy_ref = gimbal_cmd_recv.small_yaw + small_yaw_ref_bias;
+            /* 行程限位: 相对使能位 ±SMALL_YAW_MAN_ANGLE(以"上电时机械处于对齐位"为前提) */
+            if (sy_ref > small_yaw_zero_deg + SMALL_YAW_MAN_ANGLE)
+                sy_ref = small_yaw_zero_deg + SMALL_YAW_MAN_ANGLE;
+            else if (sy_ref < small_yaw_zero_deg - SMALL_YAW_MAN_ANGLE)
+                sy_ref = small_yaw_zero_deg - SMALL_YAW_MAN_ANGLE;
+            /* 斜率限制: 200Hz 任务 ⇒ 每拍最多 GIMBAL_SMALL_YAW_CMD_SLEW/200 度 */
+            float sy_step = GIMBAL_SMALL_YAW_CMD_SLEW / ROBOT_TASK_HZ;
+            if (sy_ref > small_yaw_cmd_limited + sy_step)
+                small_yaw_cmd_limited += sy_step;
+            else if (sy_ref < small_yaw_cmd_limited - sy_step)
+                small_yaw_cmd_limited -= sy_step;
+            else
+                small_yaw_cmd_limited = sy_ref;
+            DJIMotorSetRef(small_yaw_motor, small_yaw_cmd_limited);
+        }
+        else
+        {
+            DJIMotorStop(small_yaw_motor); // 无反馈不闭环(DJI驱动F3旁路之外再显式停机)
+            if (small_yaw_ref_valid)
+            {
+                small_yaw_ref_valid = 0; // 恢复后重新对齐
+                if (DWT_GetTimeline_ms() - small_yaw_warn_ms > 1000.0f) // 1Hz限频
+                {
+                    small_yaw_warn_ms = DWT_GetTimeline_ms();
+                    LOGWARNING("[gimbal] small yaw feedback lost -> small yaw stopped");
+                }
             }
         }
-        if(gimbal_SmallYaw_Init_Flag == true)
-        {
-            DJIMotorEnable(yaw_motor);
+
+        /* ===================== 大yaw ===================== */
+        DJIMotorEnable(yaw_motor);
 #ifdef GIMBAL_YAW_POSITION_LOOP
 #ifdef GIMBAL_YAW_FEEDBACK_IMU
             // 大yaw采IMU反馈(设计原意: 大yaw角度=IMU yaw-小yaw偏置,用于视觉/跟随的绝对指向)
@@ -301,27 +396,44 @@ void GimbalTask()
                     yaw_hold_target = yaw_imu;
                     yaw_hold_valid = 1;
                 }
-                if (yaw_spd_ref > GIMBAL_YAW_HOLD_STICK_TH || yaw_spd_ref < -GIMBAL_YAW_HOLD_STICK_TH)
+                /* 让位判据必须用**原始摇杆指令**(gimbal_cmd_recv.yaw_rate), 不能用已叠加保持环输出的
+                 * yaw_spd_ref: 否则保持环会把自己顶过阈值 ⇒ 反复让位/接管 ⇒ 抖动(原实现踩的就是这个坑). */
+                uint8_t stick_active = (uint8_t)(fabsf(gimbal_cmd_recv.yaw_rate) > GIMBAL_YAW_HOLD_STICK_TH);
+                /* 松杆后轴还在惯性滑行: 此时若立刻冻结目标, 保持环就会"把已经走过头的位置拉回来" ⇒
+                 * 过冲 + 来回游走(现场"转完还小范围漂移"). 滑行期间继续刷新目标, 直到实测转速降到
+                 * COAST 以下才冻结, 等于"钉在真正停住的位置". */
+                uint8_t coasting = (uint8_t)(fabsf(yaw_motor->measure.speed_aps) > GIMBAL_YAW_HOLD_COAST_TH);
+                if (stick_active || coasting)
                 {
-                    yaw_hold_target = yaw_imu; // 人在推杆: 目标跟随(摇杆速率即世界角速率)
+                    yaw_hold_target = yaw_imu; // 人在推杆 / 轴仍在滑行: 目标跟随当前指向
                 }
                 else
                 {
-                    float yaw_hold_rate = GIMBAL_YAW_HOLD_KP * YawWrap180(yaw_hold_target - yaw_imu);
-                    if (!(yaw_hold_rate <= GIMBAL_YAW_HOLD_LIMIT)) // NaN安全写法(与下方限幅一致)
-                        yaw_hold_rate = GIMBAL_YAW_HOLD_LIMIT;
-                    if (!(yaw_hold_rate >= -GIMBAL_YAW_HOLD_LIMIT))
-                        yaw_hold_rate = -GIMBAL_YAW_HOLD_LIMIT;
+                    float yaw_hold_p = GIMBAL_YAW_HOLD_KP * YawWrap180(yaw_hold_target - yaw_imu);
+                    yaw_hold_p *= GIMBAL_YAW_HOLD_SIGN; // 符号: 修正 IMU 安装方向后若变成正反馈, 改宏为 -1
+                    if (!(yaw_hold_p <= GIMBAL_YAW_HOLD_LIMIT)) // NaN安全写法(与下方限幅一致)
+                        yaw_hold_p = GIMBAL_YAW_HOLD_LIMIT;
+                    if (!(yaw_hold_p >= -GIMBAL_YAW_HOLD_LIMIT))
+                        yaw_hold_p = -GIMBAL_YAW_HOLD_LIMIT;
+                    float yaw_hold_rate = yaw_hold_p; // 本拍加给速度环的补偿速率
+#if defined(GIMBAL_YAW_FF_ON_IMU_LOST) || defined(GIMBAL_YAW_FF_FORCE)
+                    float spin_sign = (gimbal_cmd_recv.chassis_rotate_wz >= 0.0f) ? 1.0f : -1.0f;
+                    uint8_t in_spin = (uint8_t)(gimbal_cmd_recv.chassis_rotate_wz != 0.0f);
+                    /* 小陀螺: 把学到的"抵消自转所需速率"作为**前馈**, P 环只修残差.
+                     * 纯 P 在 ω=58°/s、Kp=5 时稳态偏差 ≈11.6° ⇒ 枪口一直歪着, 推前进也沿着歪的方向走. */
+                    if (in_spin && yaw_ff_learned_valid)
+                        yaw_hold_rate += yaw_ff_learned * spin_sign;
+#endif
                     yaw_spd_ref += yaw_hold_rate;
 #if defined(GIMBAL_YAW_FF_ON_IMU_LOST) || defined(GIMBAL_YAW_FF_FORCE)
                     yaw_hold_active = 1;
-                    /* 兜底常数在线自学: 只在"小陀螺(robot_cmd 填了非0速率) + 松杆 + 保持环未饱和"
-                     * 且已稳定 1s 之后进行, 学到的就是"抵消底盘自转所需的那份反向速率". */
-                    if (gimbal_cmd_recv.chassis_rotate_wz != 0.0f &&
-                        yaw_hold_rate > -GIMBAL_YAW_HOLD_LIMIT && yaw_hold_rate < GIMBAL_YAW_HOLD_LIMIT)
+                    /* 兜底常数在线自学: 只在"正方向小陀螺 + 松杆 + 保持环P未饱和"且稳定 1s 之后进行.
+                     * 学的对象是**总补偿量**(前馈+P): 收敛后 P→0 ⇒ 学到的正好是自转速率, 与兜底同量纲. */
+                    if (in_spin && spin_sign > 0.0f &&
+                        yaw_hold_p > -GIMBAL_YAW_HOLD_LIMIT && yaw_hold_p < GIMBAL_YAW_HOLD_LIMIT)
                     {
-                        if (yaw_ff_settle_ms < 1000)
-                            yaw_ff_settle_ms++;
+                        if (yaw_ff_settle_ms < 1000) // 按 ms 计(200Hz ⇒ 每拍 5ms), 原来按拍数累加 ⇒ 实际等 5s
+                            yaw_ff_settle_ms = (uint16_t)(yaw_ff_settle_ms + (uint16_t)(1000.0f / ROBOT_TASK_HZ));
                         else
                         {
                             yaw_ff_learned += GIMBAL_YAW_FF_LEARN_ALPHA * (yaw_hold_rate - yaw_ff_learned);
@@ -360,29 +472,83 @@ void GimbalTask()
                 yaw_spd_ref = yaw_spd_lim;
             if (!(yaw_spd_ref >= -yaw_spd_lim))
                 yaw_spd_ref = -yaw_spd_lim;
-            /* 摩擦前馈: 按指令方向给一个恒定电流量(与PID增益无关), 让静摩擦死区里的"起步"有确定力矩。
-             * 指令接近0时前馈也归0, 避免静止时一直往外顶(否则松杆后会被前馈慢慢推走)。阈值单位是 °/s。 */
-            if (yaw_spd_ref > 3.0f)
-                yaw_current_ff = GIMBAL_YAW_FRICTION_FF;
-            else if (yaw_spd_ref < -3.0f)
-                yaw_current_ff = -GIMBAL_YAW_FRICTION_FF;
-            else
-                yaw_current_ff = 0.0f;
+            /* 摩擦前馈(库仑补偿)改成**起步脉冲**: 只在"开始动/换向"的那一下给一段固定时长(默认150ms)的电流,
+             * 之后交给速度环(带 Ki, 会自己把维持转动的力矩攒出来).
+             * 为什么不再用"恒定给到退出门限": 状态机是粘滞的 —— 松杆后指令落进 (OFF, ON) 区间时前馈仍保持
+             * 上一次方向继续顶, 轴被推着走 ⇒ 现场"大yaw 停转之后还小范围漂移/游走", 直到反方向误差把
+             * 状态翻过去, 于是变成一来一回的慢速游走. 脉冲式没有稳态推力, 不漂. */
+            {
+                float yaw_ref_abs = fabsf(yaw_spd_ref);
+                if (yaw_ref_abs < GIMBAL_YAW_FF_OFF) // 指令已接近 0: 撤火并重新武装
+                {
+                    yaw_ff_cnt = 0;
+                    yaw_ff_dir = 0;
+                    yaw_ff_armed = 1;
+                }
+                else if (yaw_ref_abs > GIMBAL_YAW_FF_ON)
+                {
+                    int8_t ff_dir = (yaw_spd_ref > 0.0f) ? 1 : -1;
+                    if (yaw_ff_armed || ff_dir != yaw_ff_dir) // 新的一次起步(或换向)才点火
+                    {
+                        yaw_ff_dir = ff_dir;
+                        yaw_ff_cnt = GIMBAL_YAW_FF_PULSE_TICKS;
+                        yaw_ff_armed = 0;
+                    }
+                    else if (yaw_ff_cnt)
+                        yaw_ff_cnt--; // 脉冲到时自动撤, 不留稳态推力
+                }
+                yaw_current_ff = yaw_ff_cnt ? (float)yaw_ff_dir * GIMBAL_YAW_FRICTION_FF : 0.0f;
+            }
 
             yaw_ref_valid = 0; // 速度环不用基准对齐; 清掉以免切回位置环时用到旧值
             DJIMotorSetRef(yaw_motor, yaw_spd_ref);
+            yaw_spd_ref_log = yaw_spd_ref;
 #endif // GIMBAL_YAW_POSITION_LOOP
+
+        /* ===================== pitch(DM4310) =====================
+         * 云台板装在小yaw 转台上 ⇒ IMU 不随 pitch 关节转, IMU.Pitch 不是枪管俯仰角,
+         * 所以反馈改用电机自身编码器(驱动层已按 MOTOR_FEED 取 measure.total_angle / velocity·57.3).
+         * 使能对齐 + 斜率限制消除 -30° 阶跃; 稳态力矩由重力前馈承担(角度环 Ki=0). */
+        /* T_Mos>1 作为"确实收到过有效反馈"的判据: 电机没插/没上电时 id/state/position 全是 0,
+         * 此时若把 0 当作"上电零位"锁存, 等电机插回来就会瞬间产生上百度的误差 ⇒ 猛冲. */
+        if (DaemonIsOnline(pitch_motor->motor_daemon) && pitch_motor->measure.T_Mos > 1.0f)
+        {
+            DMMotorEnable(pitch_motor);
+            float pitch_fb = pitch_motor->measure.total_angle; // deg(电机侧)
+            if (!pitch_ref_valid)
+            {
+                pitch_zero_deg = pitch_fb;
+                pitch_cmd_limited = pitch_fb;
+                pitch_ref_valid = 1;
+                LOGINFO("[gimbal] pitch ref aligned: cmd=%d mdeg, feedback=%d mdeg",
+                        (int)(gimbal_cmd_recv.pitch * 1000.0f), (int)(pitch_fb * 1000.0f));
+            }
+            float pitch_ref = pitch_zero_deg + gimbal_cmd_recv.pitch; // 以上电姿态为 0(约定此时枪管水平)
+            float p_step = GIMBAL_PITCH_CMD_SLEW / ROBOT_TASK_HZ;
+            if (pitch_ref > pitch_cmd_limited + p_step)
+                pitch_cmd_limited += p_step;
+            else if (pitch_ref < pitch_cmd_limited - p_step)
+                pitch_cmd_limited -= p_step;
+            else
+                pitch_cmd_limited = pitch_ref;
+            DMMotorSetRef(pitch_motor, pitch_cmd_limited);
+#ifdef GIMBAL_PITCH_GRAVITY_FF
+            /* 重力前馈 τ = DIR·A·cos(相对水平角): 用**反馈角**而不是指令角, 保证前馈跟着真实姿态走.
+             * DIR 一次定符号(装反表现为"越补越往下掉", 改 GIMBAL_PITCH_GRAVITY_DIR). */
+            float pitch_rel = pitch_fb - pitch_zero_deg;
+            float tau_g = GIMBAL_PITCH_GRAVITY_A * cosf((pitch_rel - GIMBAL_PITCH_ZERO_DEG) * DEGREE_2_RAD);
+            DMMotorSetCurrentFeedForward(pitch_motor, GIMBAL_PITCH_GRAVITY_DIR * tau_g);
+#endif
         }
-        // 小yaw采用编码器反馈
-        DJIMotorChangeFeed(small_yaw_motor, ANGLE_LOOP, MOTOR_FEED);
-        DJIMotorChangeFeed(small_yaw_motor, SPEED_LOOP, MOTOR_FEED);
-        DJIMotorSetRef(small_yaw_motor, gimbal_cmd_recv.small_yaw);
-        
-        // pitch采用IMU反馈
-        DMMotorEnable(pitch_motor);
-        DMMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch);
-       
+        else
+        {
+            DMMotorStop(pitch_motor); // 反馈掉线: 停机, 不要拿陈旧反馈闭环
+            pitch_ref_valid = 0;
+            DMMotorSetCurrentFeedForward(pitch_motor, 0.0f);
+        }
+
         break;
+
     // 使用编码器的反馈初始化电机
     case GIMBAL_ENCODER_MODE: 
         break;
@@ -394,6 +560,19 @@ void GimbalTask()
     // 在合适的地方添加pitch重力补偿前馈力矩
     // 根据IMU姿态/pitch电机角度反馈计算出当前配重下的重力矩
     // ...
+
+    /* 1Hz 现场观测日志(限频, 否则 RTT 带宽不够): 三个轴的"指令 / 反馈 / 输出"一眼可见,
+     * 直接对应验收标准(静止误差、是否饱和、是否撞限位), 不必再读内存. */
+    if (DWT_GetTimeline_ms() - gimbal_log_ms >= 1000.0f)
+    {
+        gimbal_log_ms = DWT_GetTimeline_ms();
+        LOGINFO("[gimbal] pitch ref=%d fb=%d ff=%d mNm | yaw spd_ref=%d fb=%d ff=%d | sy ref=%d fb=%d",
+                (int)(pitch_cmd_limited * 1000.0f), (int)(pitch_motor->measure.total_angle * 1000.0f),
+                (int)(pitch_motor->Current_feedforward * 1000.0f),
+                (int)(yaw_spd_ref_log * 1000.0f), (int)(yaw_motor->measure.speed_aps * 1000.0f),
+                (int)(yaw_current_ff),
+                (int)(small_yaw_cmd_limited * 1000.0f), (int)(small_yaw_motor->measure.total_angle * 1000.0f));
+    }
 
     // 设置反馈数据,主要是imu和yaw的ecd
     gimbal_feedback_data.gimbal_imu_data = *gimba_IMU_data;

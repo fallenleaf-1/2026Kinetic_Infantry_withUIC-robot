@@ -223,7 +223,9 @@ void DMMotorTask(void const *argument)
             if (motor_setting->angle_feedback_source == OTHER_FEED)
                 pid_measure = *motor->other_angle_feedback_ptr;
             else
-                pid_measure = measure->position; // MOTOR_FEED,对total angle闭环,防止在边界处出现突跃
+                /* MOTOR_FEED: 用 total_angle(deg) 而不是 position(rad).
+                 * 上层(pitch)指令是角度制, 用 rad 会差 57.3 倍; total_angle 连续, 跨 ±π 不突跃. */
+                pid_measure = measure->total_angle; // deg
             // 更新pid_ref进入下一个环
             pid_ref = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref);
         }
@@ -235,7 +237,9 @@ void DMMotorTask(void const *argument)
                 if (setting->speed_feedback_source == OTHER_FEED)
                     pid_measure = *motor->other_speed_feedback_ptr;
                 else
-                    pid_measure = measure->velocity;
+                    /* MOTOR_FEED: 电机反馈的速度是 rad/s(DM 协议), 统一换算成 deg/s,
+                     * 与"角度环输出=速率指令(deg/s)"同量纲 —— 否则速度环等效增益差 57.3 倍, 直接打满. */
+                    pid_measure = measure->velocity * RAD_2_DEGREE; // rad/s → deg/s
                 pid_ref = PIDCalculate(&motor->speed_PID, pid_measure, pid_ref);
             }
 

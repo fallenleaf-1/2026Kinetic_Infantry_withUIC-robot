@@ -35,6 +35,9 @@
  * (gimbal.c 会解引用该指针,不能返回NULL). */
 #define INS_INIT_TIMEOUT_MS 3000u
 static uint8_t IMU_Available = 0; // BMI088是否初始化成功,供INS_Task判断能否读传感器
+#ifndef CHASSIS_BOARD
+static float last_small_yaw_warn_ms = 0; // 小yaw反馈失效告警限频
+#endif
 
 /* 供其它应用查询"姿态数据是否可信"(static变量外部拿不到).
  * 用途: gimbal.c 的大yaw世界角保持环 —— IMU不可用时必须让它失效并切到开环兜底,
@@ -257,8 +260,65 @@ void INS_Task(void)
         INS.Gyro[Y] = BMI088.Gyro[Y];
         INS.Gyro[Z] = BMI088.Gyro[Z];
 
+#ifdef INS_MOUNT_Y_DOWN
+        /* 安装方向修正: 实测(2026-10-20)加速度计读数为 (0.78, 9.71, 0.39) —— 重力几乎全在 +Y,
+         * 即 C 板是**立着**装的: 机体"上"方向 = 传感器 -Y, 于是 EKF 的 Pitch 恒≈90°(万向节死锁),
+         * YawTotalAngle 也退化 ⇒ 大yaw 的世界角保持环拿着一个假的世界角在拉, 表现就是"转完还漂".
+         * 这里把传感器系换成机体系(Z 上、右手系):
+         *   x_b = z_s,  y_b = -x_s,  z_b = -y_s   (绕上方向逆时针转 ⇒ 角速度在 -Y_s ⇒ z_b 为正)
+         * 如果以后把板子改成平放(Z 上), 注释掉 INS_MOUNT_Y_DOWN 即可。 */
+        {
+            float ax = INS.Accel[X], ay = INS.Accel[Y], az = INS.Accel[Z];
+            float gx = INS.Gyro[X], gy = INS.Gyro[Y], gz = INS.Gyro[Z];
+            INS.Accel[X] = az;
+            INS.Accel[Y] = -ax;
+            INS.Accel[Z] = -ay;
+            INS.Gyro[X] = gz;
+            INS.Gyro[Y] = -gx;
+            INS.Gyro[Z] = -gy;
+        }
+#endif
+
         // demo function,用于修正安装误差,可以不管,本demo暂时没用
         IMU_Param_Correction(&IMU_Param, INS.Gyro, INS.Accel);
+
+        /* ---- 陀螺零偏在线自愈(静止时学习) ----
+         * 为什么需要: 6轴EKF没有磁力计做航向修正, 陀螺只要有一点残余零偏, YawTotalAngle 就会一直漂.
+         * BMI088 上电标定在台架上很容易被判"被扰动"而失败(失败后回落离线常数), 实测航向漂移可达
+         * -0.6°/s ⇒ 大yaw 的"世界角保持"环会把枪口慢慢拽走(现场表现: 转完松手后还小范围漂移).
+         * 做法: 三轴角速度都很小(判定为静止)时, 用一阶低通把残余零偏学下来并从后续读数里扣掉.
+         * 阈值 0.03rad/s≈1.7°/s: 只要不是持续慢速旋转就不会学错; 时间常数≈1s(1kHz × 0.001). */
+        {
+            static float gyro_bias[3] = {0};
+            static uint8_t gyro_bias_valid = 0;
+            static uint16_t still_cnt = 0;         // 静止置信度(非硬计数: 噪声只衰减, 不清零)
+            const float GYRO_STATIC_TH = 0.03f;    // rad/s ≈1.7°/s: 只在这个量级的"静止噪声"范围内才学
+            const float GYRO_BIAS_ALPHA = 0.001f;  // 时间常数≈1s(1kHz): 静止约 3~5s 收敛
+            uint8_t quiet = (uint8_t)(fabsf(INS.Gyro[X]) < GYRO_STATIC_TH &&
+                                      fabsf(INS.Gyro[Y]) < GYRO_STATIC_TH &&
+                                      fabsf(INS.Gyro[Z]) < GYRO_STATIC_TH);
+            /* 静止置信度用"快升慢降"而不是"一有噪声就清零": 实测偶发噪声尖峰会把清零式的门永远关死
+             * (本次现场复现: 加了硬门限后零偏完全学不到, 漂移回到 -0.64°/s). */
+            if (quiet)
+            {
+                if (still_cnt < 2000)
+                    still_cnt += 2;
+            }
+            else if (still_cnt > 8)
+                still_cnt -= 8;
+            else
+                still_cnt = 0;
+            /* 置信度攒够(≈0.5s 净静止)才更新零偏: 手动快速转动时置信度迅速跌落, 不会把转动学成零偏 */
+            if (still_cnt > 1000)
+            {
+                for (uint8_t i = 0; i < 3; ++i)
+                    gyro_bias[i] += GYRO_BIAS_ALPHA * (INS.Gyro[i] - gyro_bias[i]);
+                gyro_bias_valid = 1;
+            }
+            if (gyro_bias_valid) // 学到之后每拍都扣, 旋转时也扣同一个零偏
+                for (uint8_t i = 0; i < 3; ++i)
+                    INS.Gyro[i] -= gyro_bias[i];
+        }
 
         // 计算重力加速度矢量和b系的XY两轴的夹角,可用作功能扩展,本demo暂时没用
         // INS.atanxz = -atan2f(INS.Accel[X], INS.Accel[Z]) * 180 / PI;
@@ -309,14 +369,32 @@ void INS_Task(void)
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
 
         // 为最终姿态数据赋值
-        memccpy(INS.attitude.Gyro, INS.Gyro, 0, sizeof(INS.Gyro));
-        memccpy(INS.attitude.Accel, INS.Accel, 0, sizeof(INS.Accel));
+        /* 必须用 memcpy: memccpy(dst,src,0,n) 遇到源字节 0x00 就停止拷贝,
+         * 而浮点数的字节里出现 0x00 很常见(小数值高位为0) ⇒ attitude.Gyro/Accel 只被拷了前1~几个字节,
+         * 其余保持旧值/0. pitch 的速度环正是读 &attitude.Gyro[1] (OTHER_FEED), 会间歇性拿到 0 或陈旧值. */
+        memcpy(INS.attitude.Gyro, INS.Gyro, sizeof(INS.Gyro));
+        memcpy(INS.attitude.Accel, INS.Accel, sizeof(INS.Accel));
         INS.attitude.Roll = INS.Roll;
         INS.attitude.Pitch = INS.Pitch;
         INS.attitude.Yaw = INS.Yaw;
         INS.attitude.YawTotalAngle = INS.YawTotalAngle;
 #ifndef CHASSIS_BOARD // 底盘板没有小yaw电机,不能计算大yaw反馈
-        INS.attitude.BigYaw_Feed = INS.YawTotalAngle - CalcSmallYawOffsetAngle(); // 计算大yaw反馈值
+        /* 小yaw 反馈失效(未接/掉线)时 CalcSmallYawOffsetAngle() 会一直返回基于陈旧单圈角的常数,
+         * BigYaw_Feed 就整体偏一个固定量 —— 世界角保持环会把枪口往错误方向拽(小陀螺尤其明显).
+         * 失效时退回"IMU yaw 即大yaw"的原语义(相当于小yaw 关节角=0), 并限频告警. */
+        if (small_yaw_motor && small_yaw_motor->daemon && DaemonIsOnline(small_yaw_motor->daemon))
+        {
+            INS.attitude.BigYaw_Feed = INS.YawTotalAngle - CalcSmallYawOffsetAngle(); // 计算大yaw反馈值
+        }
+        else
+        {
+            INS.attitude.BigYaw_Feed = INS.YawTotalAngle;
+            if (DWT_GetTimeline_ms() - last_small_yaw_warn_ms > 1000.0f) // 1Hz限频,避免刷屏
+            {
+                last_small_yaw_warn_ms = DWT_GetTimeline_ms();
+                LOGWARNING("[ins] small yaw feedback lost -> BigYaw_Feed = IMU yaw (joint offset ignored)");
+            }
+        }
 #endif
         
 
