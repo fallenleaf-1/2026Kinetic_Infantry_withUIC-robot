@@ -61,9 +61,9 @@
 #define SMALL_YAW_MIN_ANGLE -30.0f      // 小YAW最小角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
 #define GIMBAL_DEAD_BAND 10        // 云台控制死区,低于该值的遥控器输入将被置为0
 /* 遥控器左摇杆水平 → 大yaw参考角的增量(度/拍; RobotTask 200Hz)
- * 原值 0.0025 ≈ 满杆 330°/s,现场实测"太快/一推就猛转",降到 0.0009 ≈ 满杆 119°/s。
+ * 原值 0.0025 ≈ 满杆 330°/s,现场实测"太快/一推就猛转",降到 0.0012 ≈ 满杆 158°/s。
  * 需要更快/更慢只改这一个数(两个档位分支都用它)。 */
-#define GIMBAL_YAW_RC_SCALE 0.0009f
+#define GIMBAL_YAW_RC_SCALE 0.0012f
 
 /* RobotTask(robot_cmd)的调用频率: osDelay(5) ⇒ 200Hz。
  * 用于把"每拍的角度增量"换算成"角速度指令(°/s)"发给云台的速度环。 */
