@@ -56,6 +56,11 @@ static float pitch_zero_deg = 0.0f; // 上电时 pitch 编码器角(约定此时
  * yaw_hold_target 是"要钉住的世界指向(°)", 摇杆接管时不断刷新为当前指向, 松杆后由P环拉回. */
 static float yaw_hold_target = 0.0f;
 static uint8_t yaw_hold_valid = 0; // 目标角是否已建立(停机/IMU异常时清零, 使能瞬间重新对齐)
+/* 松杆后的一次性冻结状态: 原实现用 |speed|>COAST 的无状态判据, 反向修正一旦超过阈值
+ * 就会重新进入"跟随", 把已经越过目标的位置又当成新目标 ⇒ 停止点附近来回游走.
+ * 现在只在"松杆 + 转速连续低于阈值"时冻结一次, 之后只有摇杆重新接管才解冻. */
+static uint8_t yaw_hold_frozen = 0;
+static uint8_t yaw_hold_stop_cnt = 0; // 连续低于冻结阈值的拍数
 
 /* 角度差归一化到 (-180,180] : 保持的是"朝向"而非"第几圈", 且避免为了一次误差反绕整圈 */
 static float YawWrap180(float a)
@@ -277,6 +282,8 @@ void GimbalTask()
         pitch_cmd_limited = pitch_motor->measure.total_angle;
 #ifdef GIMBAL_YAW_IMU_HOLD
         yaw_hold_valid = 0;    // 停机: 下次使能时把世界角保持目标重新对齐到当前指向
+        yaw_hold_frozen = 0;
+        yaw_hold_stop_cnt = 0;
 #endif
 #if defined(GIMBAL_YAW_FF_ON_IMU_LOST) || defined(GIMBAL_YAW_FF_FORCE)
         yaw_ff_settle_ms = 0;  // 停机: 重新计数"小陀螺稳定时长"(学到的兜底常数保留)
@@ -388,6 +395,8 @@ void GimbalTask()
             if (!yaw_hold_ok)
             {
                 yaw_hold_valid = 0; // IMU姿态不可用/被强制: 保持环失效, 下次可用时重新对齐目标
+                yaw_hold_frozen = 0;
+                yaw_hold_stop_cnt = 0;
             }
             else
             {
@@ -395,19 +404,56 @@ void GimbalTask()
                 {
                     yaw_hold_target = yaw_imu;
                     yaw_hold_valid = 1;
+                    yaw_hold_frozen = 0;
+                    yaw_hold_stop_cnt = 0;
                 }
                 /* 让位判据必须用**原始摇杆指令**(gimbal_cmd_recv.yaw_rate), 不能用已叠加保持环输出的
                  * yaw_spd_ref: 否则保持环会把自己顶过阈值 ⇒ 反复让位/接管 ⇒ 抖动(原实现踩的就是这个坑). */
                 uint8_t stick_active = (uint8_t)(fabsf(gimbal_cmd_recv.yaw_rate) > GIMBAL_YAW_HOLD_STICK_TH);
-                /* 松杆后轴还在惯性滑行: 此时若立刻冻结目标, 保持环就会"把已经走过头的位置拉回来" ⇒
-                 * 过冲 + 来回游走(现场"转完还小范围漂移"). 滑行期间继续刷新目标, 直到实测转速降到
-                 * COAST 以下才冻结, 等于"钉在真正停住的位置". */
-                uint8_t coasting = (uint8_t)(fabsf(yaw_motor->measure.speed_aps) > GIMBAL_YAW_HOLD_COAST_TH);
-                if (stick_active || coasting)
+                /* 小陀螺时电机相对底盘长期有转速, 不能用"转速降到 0"判断停住; 该标志同时供下面的
+                 * 保持环/前馈学习使用. */
+                uint8_t yaw_in_spin = (uint8_t)(gimbal_cmd_recv.chassis_rotate_wz != 0.0f);
+
+                if (stick_active)
                 {
-                    yaw_hold_target = yaw_imu; // 人在推杆 / 轴仍在滑行: 目标跟随当前指向
+                    /* 人在推杆: 目标跟随当前指向, 并退出冻结(下次松杆重新走一遍"减速->冻结") */
+                    yaw_hold_target = yaw_imu;
+                    yaw_hold_frozen = 0;
+                    yaw_hold_stop_cnt = 0;
                 }
-                else
+                else if (!yaw_hold_frozen)
+                {
+                    if (yaw_in_spin)
+                    {
+                        /* 小陀螺: 松杆即冻结世界角目标, 由保持环持续抵消底盘自转.
+                         * 此时电机相对底盘的转速长期非零, 不能等它降到 0 再冻结. */
+                        yaw_hold_target = yaw_imu;
+                        yaw_hold_frozen = 1;
+                        yaw_hold_stop_cnt = 0;
+                    }
+                    else
+                    {
+                        /* 松杆后先让目标跟随, 等轴真正慢下来再一次性冻结.
+                         * 不再用"|speed|>阈值就永远跟随"的无状态判据: 反向修正一旦超过阈值
+                         * 会重新进入跟随, 目标被拉回、P 修正被撤销 ⇒ 停止点附近来回游走. */
+                        yaw_hold_target = yaw_imu;
+                        if (fabsf(yaw_motor->measure.speed_aps) < GIMBAL_YAW_HOLD_COAST_TH)
+                        {
+                            if (++yaw_hold_stop_cnt >= GIMBAL_YAW_HOLD_FREEZE_TICKS)
+                            {
+                                yaw_hold_frozen = 1;
+                                yaw_hold_stop_cnt = 0;
+                                yaw_hold_target = yaw_imu; // 在真正停住处冻结
+                            }
+                        }
+                        else
+                        {
+                            yaw_hold_stop_cnt = 0;
+                        }
+                    }
+                }
+
+                if (yaw_hold_frozen)
                 {
                     float yaw_hold_p = GIMBAL_YAW_HOLD_KP * YawWrap180(yaw_hold_target - yaw_imu);
                     yaw_hold_p *= GIMBAL_YAW_HOLD_SIGN; // 符号: 修正 IMU 安装方向后若变成正反馈, 改宏为 -1
@@ -418,10 +464,9 @@ void GimbalTask()
                     float yaw_hold_rate = yaw_hold_p; // 本拍加给速度环的补偿速率
 #if defined(GIMBAL_YAW_FF_ON_IMU_LOST) || defined(GIMBAL_YAW_FF_FORCE)
                     float spin_sign = (gimbal_cmd_recv.chassis_rotate_wz >= 0.0f) ? 1.0f : -1.0f;
-                    uint8_t in_spin = (uint8_t)(gimbal_cmd_recv.chassis_rotate_wz != 0.0f);
                     /* 小陀螺: 把学到的"抵消自转所需速率"作为**前馈**, P 环只修残差.
                      * 纯 P 在 ω=58°/s、Kp=5 时稳态偏差 ≈11.6° ⇒ 枪口一直歪着, 推前进也沿着歪的方向走. */
-                    if (in_spin && yaw_ff_learned_valid)
+                    if (yaw_in_spin && yaw_ff_learned_valid)
                         yaw_hold_rate += yaw_ff_learned * spin_sign;
 #endif
                     yaw_spd_ref += yaw_hold_rate;
@@ -429,7 +474,7 @@ void GimbalTask()
                     yaw_hold_active = 1;
                     /* 兜底常数在线自学: 只在"正方向小陀螺 + 松杆 + 保持环P未饱和"且稳定 1s 之后进行.
                      * 学的对象是**总补偿量**(前馈+P): 收敛后 P→0 ⇒ 学到的正好是自转速率, 与兜底同量纲. */
-                    if (in_spin && spin_sign > 0.0f &&
+                    if (yaw_in_spin && spin_sign > 0.0f &&
                         yaw_hold_p > -GIMBAL_YAW_HOLD_LIMIT && yaw_hold_p < GIMBAL_YAW_HOLD_LIMIT)
                     {
                         if (yaw_ff_settle_ms < 1000) // 按 ms 计(200Hz ⇒ 每拍 5ms), 原来按拍数累加 ⇒ 实际等 5s
@@ -457,9 +502,11 @@ void GimbalTask()
             }
 #endif // GIMBAL_YAW_IMU_HOLD
 #if defined(GIMBAL_YAW_FF_ON_IMU_LOST) || defined(GIMBAL_YAW_FF_FORCE)
-            if (!yaw_hold_active)
+            /* 兜底只在**小陀螺档**生效: yaw_ff_learned 是"抵消底盘自转"的速率, 学到的值不会自动清零;
+             * 若普通档也叠加, 会把正常 yaw 持续往一个方向推(松杆减速段尤其明显). */
+            if (!yaw_hold_active && gimbal_cmd_recv.chassis_rotate_wz != 0.0f)
             {
-                /* 开环兜底: IMU没有世界基准了, 用标定常数让大yaw反向转(非小陀螺档该通道为0, 不影响别的档).
+                /* 开环兜底: IMU没有世界基准了, 用标定常数让大yaw反向转.
                  * 优先用自学到的实测值; 没学过才用 robot_def.h 的初值(初值只保证量级, 符号按约定给出). */
                 if (yaw_ff_learned_valid)
                     yaw_spd_ref += yaw_ff_learned;
@@ -478,7 +525,11 @@ void GimbalTask()
              * 上一次方向继续顶, 轴被推着走 ⇒ 现场"大yaw 停转之后还小范围漂移/游走", 直到反方向误差把
              * 状态翻过去, 于是变成一来一回的慢速游走. 脉冲式没有稳态推力, 不漂. */
             {
-                float yaw_ref_abs = fabsf(yaw_spd_ref);
+                /* 摩擦前馈只跟随**摇杆指令**, 不跟随保持环的停止修正:
+                 * 否则轴刚越过目标、保持环反向修正超过 FF_ON 时也会点火 ±1200/150ms,
+                 * 把"拉回"变成一次反向冲过头, 停止点来回游走. */
+                float yaw_pilot_ref = gimbal_cmd_recv.yaw_rate;
+                float yaw_ref_abs = fabsf(yaw_pilot_ref);
                 if (yaw_ref_abs < GIMBAL_YAW_FF_OFF) // 指令已接近 0: 撤火并重新武装
                 {
                     yaw_ff_cnt = 0;
@@ -487,7 +538,7 @@ void GimbalTask()
                 }
                 else if (yaw_ref_abs > GIMBAL_YAW_FF_ON)
                 {
-                    int8_t ff_dir = (yaw_spd_ref > 0.0f) ? 1 : -1;
+                    int8_t ff_dir = (yaw_pilot_ref > 0.0f) ? 1 : -1;
                     if (yaw_ff_armed || ff_dir != yaw_ff_dir) // 新的一次起步(或换向)才点火
                     {
                         yaw_ff_dir = ff_dir;
